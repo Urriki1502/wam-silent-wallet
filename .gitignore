@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+.venv/
+*.py[cod]
+.DS_Store
+.env.*
+release/
+.package-build/
+*.app/
+wallet.db
+wallet.db-*
+keys.wsp
+.cookie
+*.wspbak
