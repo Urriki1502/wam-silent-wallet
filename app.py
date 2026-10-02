@@ -59,6 +59,19 @@ def main():
         window
     )
 
+    # Keep Python re-entering from Qt's native event loop so
+    # SIGINT/SIGTERM handlers are dispatched promptly.
+    signal_pump = QTimer(
+        window
+    )
+    signal_pump.setInterval(
+        250
+    )
+    signal_pump.timeout.connect(
+        lambda: None
+    )
+    signal_pump.start()
+
     app.aboutToQuit.connect(
         window.shutdown_for_application_exit
     )
