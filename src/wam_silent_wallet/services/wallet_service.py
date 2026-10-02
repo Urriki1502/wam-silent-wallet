@@ -5,6 +5,7 @@ import tempfile
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import TypeAlias
 
 from wam_sp.api import SilentWallet
 from wam_sp.keystore import Keyring, load_private, save_private
@@ -14,6 +15,8 @@ from wam_sp.backup import (
     restore as restore_recovery,
 )
 
+
+SecretMaterial: TypeAlias = str | bytes | bytearray | memoryview
 
 ATOMS_PER_WAM = 100_000_000
 
@@ -36,9 +39,24 @@ class WalletService:
             and self.keys_path.exists()
         )
 
-    def _open(self, passphrase: str):
-        if not isinstance(passphrase, str) or not passphrase:
+    @staticmethod
+    def _password_bytes(secret) -> bytes:
+        if isinstance(secret, str):
+            value = secret.encode("utf-8")
+        elif isinstance(secret, bytes):
+            value = secret
+        elif isinstance(secret, (bytearray, memoryview)):
+            value = bytes(secret)
+        else:
             raise ValueError("PASSPHRASE_REQUIRED")
+
+        if not value:
+            raise ValueError("PASSPHRASE_REQUIRED")
+
+        return value
+
+    def _open(self, passphrase):
+        password = self._password_bytes(passphrase)
 
         if not self.exists():
             raise ValueError("WALLET_NOT_FOUND")
@@ -47,7 +65,7 @@ class WalletService:
 
         ring = Keyring.restore(
             encrypted,
-            passphrase.encode(),
+            password,
         )
 
         wallet = SilentWallet(
@@ -57,7 +75,7 @@ class WalletService:
 
         return ring, wallet
 
-    def verify_passphrase(self, passphrase: str) -> dict:
+    def verify_passphrase(self, passphrase: SecretMaterial) -> dict:
         """
         Validate the wallet passphrase without exposing private keys.
 
@@ -78,7 +96,7 @@ class WalletService:
             wallet.close()
             ring.close()
 
-    def receive_address(self, passphrase: str) -> str:
+    def receive_address(self, passphrase: SecretMaterial) -> str:
         ring, wallet = self._open(passphrase)
 
         try:
@@ -87,7 +105,7 @@ class WalletService:
             wallet.close()
             ring.close()
 
-    def receive_addresses(self, passphrase: str) -> list[dict]:
+    def receive_addresses(self, passphrase: SecretMaterial) -> list[dict]:
         """
         Return the base address plus all registered labeled addresses.
         """
@@ -139,7 +157,7 @@ class WalletService:
 
     def create_labeled_address(
         self,
-        passphrase: str,
+        passphrase: SecretMaterial,
         name: str,
     ) -> dict:
         """
@@ -186,7 +204,7 @@ class WalletService:
             )
 
             encrypted = ring.backup(
-                passphrase.encode(),
+                self._password_bytes(passphrase),
             )
 
             temporary_keys.unlink(
@@ -229,7 +247,7 @@ class WalletService:
 
     def create_recovery_bundle(
         self,
-        passphrase: str,
+        passphrase: SecretMaterial,
     ) -> dict:
         """
         Create an authenticated WSP-1 recovery bundle.
@@ -271,7 +289,7 @@ class WalletService:
             envelope = create_recovery(
                 ring,
                 wallet.scanner,
-                passphrase.encode(),
+                self._password_bytes(passphrase),
             )
 
             # save_private uses O_EXCL + 0600 and refuses
@@ -304,7 +322,7 @@ class WalletService:
 
     def verify_recovery_bundle(
         self,
-        passphrase: str,
+        passphrase: SecretMaterial,
         backup_path: str,
     ) -> dict:
         """
@@ -349,7 +367,7 @@ class WalletService:
 
             ring, scanner = restore_recovery(
                 envelope,
-                passphrase.encode(),
+                self._password_bytes(passphrase),
                 restored_db,
             )
 
@@ -444,7 +462,7 @@ class WalletService:
 
     def send_payment(
         self,
-        passphrase: str,
+        passphrase: SecretMaterial,
         chain,
         destination: str,
         amount_text: str,
@@ -568,7 +586,7 @@ class WalletService:
 
     def scan_snapshot(
         self,
-        passphrase: str,
+        passphrase: SecretMaterial,
         chain,
     ) -> dict:
         ring, wallet = self._open(passphrase)
@@ -606,7 +624,7 @@ class WalletService:
 
     def payments_snapshot(
         self,
-        passphrase: str,
+        passphrase: SecretMaterial,
         chain,
     ) -> dict:
         ring, wallet = self._open(passphrase)
@@ -661,7 +679,7 @@ class WalletService:
 
     def background_sync_snapshot(
         self,
-        passphrase: str,
+        passphrase: SecretMaterial,
         chain,
     ) -> dict:
         """

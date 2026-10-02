@@ -2,9 +2,8 @@
 
 from dataclasses import dataclass
 
-from wam_sp.wallet import Signer
-
 from .fee_service import FeePolicyService
+from .signer_service import SignerService
 
 
 ATOMS_PER_WAM = 100_000_000
@@ -59,9 +58,15 @@ class PaymentService:
         self,
         wallet_service,
         node_service,
+        signer_service=None,
     ):
         self.wallet_service = wallet_service
         self.node_service = node_service
+        self.signer = (
+            signer_service
+            if signer_service is not None
+            else SignerService()
+        )
         self.fees = FeePolicyService(
             node_service
         )
@@ -290,18 +295,19 @@ class PaymentService:
                 mempool=True,
             )
 
-            signer = Signer(
-                ring
-            )
-
-            prepared = signer.prepare(
-                review.proposal
-            )
-
-            signed_psbt = signer.sign(
-                prepared,
-                review.proposal.intents,
-                review.fee_atoms,
+            signed_psbt = (
+                self.signer
+                .sign(
+                    keyring=ring,
+                    proposal=review.proposal,
+                    approved_intents=(
+                        review.proposal
+                        .intents
+                    ),
+                    approved_max_fee=(
+                        review.fee_atoms
+                    ),
+                )
             )
 
             txid = wallet.broadcast(

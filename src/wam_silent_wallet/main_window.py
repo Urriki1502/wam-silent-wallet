@@ -1175,15 +1175,18 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
         try:
-            result = (
-                self.wallet_service
-                .scan_snapshot(
-                    self.session_service
-                    .passphrase(),
-                    self.node_service
-                    .scanner_chain(),
+            with (
+                self.session_service
+                .secret_lease()
+            ) as secret:
+                result = (
+                    self.wallet_service
+                    .scan_snapshot(
+                        secret,
+                        self.node_service
+                        .scanner_chain(),
+                    )
                 )
-            )
 
             self._apply_dashboard_wallet_snapshot(
                 {

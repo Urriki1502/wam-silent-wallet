@@ -43,20 +43,16 @@ class BackgroundSyncThread(QThread):
                     break
 
             try:
-                passphrase = (
+                with (
                     self.session_service
-                    .passphrase()
-                )
+                    .secret_lease()
+                ) as secret:
+                    result = (
+                        self.sync_service
+                        .cycle(secret)
+                    )
             except Exception:
                 break
-
-            try:
-                result = (
-                    self.sync_service
-                    .cycle(passphrase)
-                )
-            finally:
-                passphrase = None
 
             self.outcome.emit(
                 result
