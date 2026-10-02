@@ -105,7 +105,7 @@ def parse_codesign_details(text: str) -> dict[str, list[str]]:
 
         if line.startswith("CodeDirectory "):
             match = re.search(
-                r"(?:^|\\s)flags=([^\\s]+)",
+                r"(?:^|\s)flags=([^\s]+)",
                 line,
             )
             if match:
