@@ -1,0 +1,295 @@
+name: macOS Release Engineering
+
+on:
+  push:
+    branches:
+      - "feat/6n7h-*"
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Release signing mode
+        required: true
+        default: adhoc
+        type: choice
+        options:
+          - adhoc
+          - developer-id
+      version:
+        description: Optional release version override
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package / sign / qualify
+    runs-on: macos-14
+    timeout-minutes: 75
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: wam-silent-wallet
+
+    steps:
+      - name: Checkout wallet
+        uses: actions/checkout@v4
+        with:
+          path: wam-silent-wallet
+
+      - name: Read locked build identity
+        id: lock
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open(
+              "supply-chain.lock.json",
+              encoding="utf-8",
+          ) as handle:
+              data = json.load(handle)
+
+          values = {
+              "wsp_commit": data[
+                  "wam_silent_payments"
+              ][
+                  "commit"
+              ],
+              "python_version": data[
+                  "python"
+              ][
+                  "major_minor"
+              ],
+              "machine": data[
+                  "platform"
+              ][
+                  "machine"
+              ],
+          }
+
+          with open(
+              os.environ["GITHUB_OUTPUT"],
+              "a",
+              encoding="utf-8",
+          ) as handle:
+              for key, value in values.items():
+                  handle.write(
+                      f"{key}={value}\n"
+                  )
+          PY
+
+      - name: Checkout pinned WSP source
+        uses: actions/checkout@v4
+        with:
+          repository: Urriki1502/wam-silent-payments
+          ref: ${{ steps.lock.outputs.wsp_commit }}
+          path: wam-silent-payments
+
+      - name: Set up locked Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.lock.outputs.python_version }}
+          architecture: ${{ steps.lock.outputs.machine }}
+
+      - name: Install locked dependencies
+        run: |
+          set -euo pipefail
+
+          python -m pip install \
+              --disable-pip-version-check \
+              --require-hashes \
+              -r requirements-hashed.txt
+
+          SDK_ROOT="../wam-silent-payments/integration-deps/wam-sdk"
+
+          PIP_NO_INDEX=1 \
+          python -m pip install \
+              --disable-pip-version-check \
+              --no-deps \
+              --no-build-isolation \
+              "$SDK_ROOT"
+
+          PIP_NO_INDEX=1 \
+          python -m pip install \
+              --disable-pip-version-check \
+              --no-deps \
+              --no-build-isolation \
+              ../wam-silent-payments
+
+      - name: Qualification gate
+        run: |
+          set -euo pipefail
+
+          export PYTHONPATH="$PWD/src:$PWD"
+
+          python scripts/supply_chain.py \
+              verify \
+              --root . \
+              --wsp ../wam-silent-payments \
+              --lock supply-chain.lock.json
+
+          python scripts/artifact_lock.py \
+              verify \
+              --root .
+
+          python -m pytest -q
+
+          python scripts/release_integrity.py \
+              --root .
+
+          git diff --check
+
+      - name: Resolve release mode
+        id: release
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+              MODE="developer-id"
+              VERSION="${GITHUB_REF_NAME#v}"
+
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+              MODE="${{ inputs.mode }}"
+              VERSION="${{ inputs.version }}"
+
+          else
+              MODE="adhoc"
+              VERSION=""
+          fi
+
+          if [[ -z "$VERSION" ]]; then
+              VERSION="$(
+                  python - <<'PY'
+          import tomllib
+
+          with open(
+              "pyproject.toml",
+              "rb",
+          ) as handle:
+              print(
+                  tomllib.load(handle)[
+                      "project"
+                  ][
+                      "version"
+                  ]
+              )
+          PY
+              )"
+          fi
+
+          echo "mode=$MODE" >>"$GITHUB_OUTPUT"
+          echo "version=$VERSION" >>"$GITHUB_OUTPUT"
+
+          echo "Mode: $MODE"
+          echo "Version: $VERSION"
+
+      - name: Import Developer ID certificate
+        id: signing
+        if: steps.release.outputs.mode == 'developer-id'
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          : "${MACOS_CERT_P12_BASE64:?MACOS_CERT_P12_BASE64 secret missing}"
+          : "${MACOS_CERT_PASSWORD:?MACOS_CERT_PASSWORD secret missing}"
+
+          KEYCHAIN="$RUNNER_TEMP/wam-release.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          CERT="$RUNNER_TEMP/developer-id.p12"
+
+          printf '%s' \
+              "$MACOS_CERT_P12_BASE64" \
+              | base64 --decode \
+              >"$CERT"
+
+          security create-keychain \
+              -p "$KEYCHAIN_PASSWORD" \
+              "$KEYCHAIN"
+
+          security set-keychain-settings \
+              -lut 21600 \
+              "$KEYCHAIN"
+
+          security unlock-keychain \
+              -p "$KEYCHAIN_PASSWORD" \
+              "$KEYCHAIN"
+
+          security import \
+              "$CERT" \
+              -k "$KEYCHAIN" \
+              -P "$MACOS_CERT_PASSWORD" \
+              -T /usr/bin/codesign \
+              -T /usr/bin/security
+
+          security list-keychains \
+              -d user \
+              -s "$KEYCHAIN"
+
+          security set-key-partition-list \
+              -S apple-tool:,apple:,codesign: \
+              -s \
+              -k "$KEYCHAIN_PASSWORD" \
+              "$KEYCHAIN"
+
+          IDENTITY="$(
+              security find-identity \
+                  -v \
+                  -p codesigning \
+                  "$KEYCHAIN" \
+              | sed -n \
+                  's/.*"\(Developer ID Application:.*\)"/\1/p' \
+              | head -1
+          )"
+
+          test -n "$IDENTITY"
+
+          echo "identity=$IDENTITY" \
+              >>"$GITHUB_OUTPUT"
+
+          echo "Developer ID identity imported."
+
+      - name: Build release
+        env:
+          RELEASE_MODE: ${{ steps.release.outputs.mode }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          MACOS_CODESIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          RUN_LAUNCH_SMOKE: "1"
+          PYTHON: python
+        run: |
+          set -euo pipefail
+
+          bash scripts/macos_release.sh
+
+      - name: Upload release evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release-${{ steps.release.outputs.version }}-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            wam-silent-wallet/release/${{ steps.release.outputs.version }}/*
+
+      - name: Publish GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          gh release create \
+              "$GITHUB_REF_NAME" \
+              release/${{ steps.release.outputs.version }}/* \
+              --verify-tag \
+              --title "WAM Silent Wallet $GITHUB_REF_NAME" \
+              --generate-notes
