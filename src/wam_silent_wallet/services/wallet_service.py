@@ -12,6 +12,10 @@ from .recovery_service import RecoveryService
 from .scanner_snapshot import build_scanner_snapshot
 from .payment_journal import PaymentJournalService
 from .payment_reconciliation import PaymentReconciliationService
+from .filesystem_integrity import (
+    harden_private_directory,
+    harden_private_file,
+)
 
 from wam_sp.api import SilentWallet
 from wam_sp.keystore import MAGIC, Keyring, load_private, save_private
@@ -60,6 +64,17 @@ class WalletService:
             self.resolve_data_dir(
                 data_dir
             )
+        )
+
+        if self.data_dir.is_symlink():
+            raise RuntimeError(
+                "WALLET_DATA_DIR_SYMLINK"
+            )
+
+        harden_private_directory(
+            self.data_dir,
+            create=True,
+            code="WALLET_DATA_DIR_UNSAFE",
         )
 
         self.db_path = (
@@ -112,6 +127,12 @@ class WalletService:
                 "WALLET_DATA_DIR_INVALID"
             )
 
+        harden_private_directory(
+            self.data_dir,
+            create=True,
+            code="WALLET_DATA_DIR_UNSAFE",
+        )
+
         for path in (
             self.db_path,
             self.keys_path,
@@ -144,6 +165,13 @@ class WalletService:
             raise RuntimeError(
                 "WALLET_FILESET_NOT_REGULAR"
             )
+
+        harden_private_file(
+            self.db_path,
+            required=True,
+            code="WALLET_DATABASE_UNSAFE",
+        )
+
 
     def _validate_database_preflight(
         self,
@@ -256,9 +284,11 @@ class WalletService:
         if not self.exists():
             raise ValueError("WALLET_NOT_FOUND")
 
+        # Re-assert structural + filesystem security immediately
+        # before private key / database material is consumed.
+        self._validate_startup_fileset()
+
         # Deep integrity checks belong at the wallet-open boundary.
-        # Construction/startup performs structural checks only so
-        # recovery machinery can inspect and repair interrupted state.
         self._validate_keys_preflight()
         self._validate_database_preflight()
 
@@ -431,6 +461,12 @@ class WalletService:
                 self.keys_path,
             )
 
+            harden_private_file(
+                self.keys_path,
+                required=True,
+                code="WALLET_KEYS_UNSAFE",
+            )
+
             return {
                 "label": created["label"],
                 "epoch": created["epoch"],
@@ -464,19 +500,11 @@ class WalletService:
             / "Backups"
         )
 
-        backup_dir.mkdir(
-            parents=True,
-            exist_ok=True,
+        harden_private_directory(
+            backup_dir,
+            create=True,
+            code="WALLET_BACKUP_DIRECTORY_UNSAFE",
         )
-
-        # WSP private-file helpers require a private directory.
-        try:
-            os.chmod(
-                backup_dir,
-                0o700,
-            )
-        except OSError:
-            pass
 
         timestamp = datetime.now().strftime(
             "%Y%m%d-%H%M%S-%f"
@@ -498,6 +526,12 @@ class WalletService:
             save_private(
                 backup_path,
                 envelope,
+            )
+
+            harden_private_file(
+                backup_path,
+                required=True,
+                code="WALLET_BACKUP_FILE_UNSAFE",
             )
 
             digest = hashlib.sha256(

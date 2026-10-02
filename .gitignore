@@ -228,3 +228,11 @@ wallet.db-*
 keys.wsp
 .cookie
 *.wspbak
+
+# WAM Silent Wallet private runtime state
+.wallet-runtime.lock
+wallet.db.scan.lock
+recovery-pending.json
+.recovery-activation.json
+.recovery-rollback-*/
+.payment-journal/

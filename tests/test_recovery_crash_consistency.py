@@ -77,7 +77,7 @@ class RecoveryCrashConsistencyTests(
 
         rollback = (
             self.root
-            / ".recovery-rollback-test"
+            / ".recovery-rollback-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
 
         rollback.mkdir()
@@ -147,7 +147,7 @@ class RecoveryCrashConsistencyTests(
 
         rollback = (
             self.root
-            / ".recovery-rollback-test"
+            / ".recovery-rollback-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
 
         rollback.mkdir()
@@ -205,7 +205,7 @@ class RecoveryCrashConsistencyTests(
 
         rollback = (
             self.root
-            / ".recovery-rollback-test"
+            / ".recovery-rollback-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
 
         rollback.mkdir()
@@ -261,7 +261,7 @@ class RecoveryCrashConsistencyTests(
     def test_wallet_service_repairs_interrupted_activation_on_start(self):
         rollback = (
             self.root
-            / ".recovery-rollback-test"
+            / ".recovery-rollback-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
 
         rollback.mkdir()

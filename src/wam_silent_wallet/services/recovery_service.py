@@ -33,6 +33,11 @@ from wam_sp.keystore import (
     save_private,
 )
 
+from .filesystem_integrity import (
+    harden_private_directory,
+    harden_private_file,
+)
+
 
 class RecoveryService:
     PENDING_VERSION = 1
@@ -94,18 +99,11 @@ class RecoveryService:
     def _private_dir(
         path: Path,
     ):
-        path.mkdir(
-            parents=True,
-            exist_ok=True,
+        harden_private_directory(
+            path,
+            create=True,
+            code="RECOVERY_DIRECTORY_UNSAFE",
         )
-
-        try:
-            os.chmod(
-                path,
-                0o700,
-            )
-        except OSError:
-            pass
 
     @staticmethod
     def _fsync_dir(
@@ -241,6 +239,37 @@ class RecoveryService:
             self.data_dir
         )
 
+    @staticmethod
+    def _valid_rollback_name(
+        value,
+    ) -> bool:
+        prefix = ".recovery-rollback-"
+
+        if (
+            not isinstance(
+                value,
+                str,
+            )
+            or Path(value).name
+            != value
+            or not value.startswith(
+                prefix
+            )
+        ):
+            return False
+
+        suffix = value[
+            len(prefix):
+        ]
+
+        return (
+            len(suffix) == 32
+            and all(
+                ch in "0123456789abcdef"
+                for ch in suffix
+            )
+        )
+
     def _load_activation_journal(
         self,
     ) -> dict | None:
@@ -248,15 +277,29 @@ class RecoveryService:
             self.activation_journal_path
         )
 
-        if not path.is_file():
+        if path.is_symlink():
+            raise RuntimeError(
+                "RECOVERY_ACTIVATION_JOURNAL_UNSAFE"
+            )
+
+        if not path.exists():
             return None
 
         try:
+            harden_private_file(
+                path,
+                required=True,
+                code="RECOVERY_ACTIVATION_JOURNAL_UNSAFE",
+            )
+
             data = json.loads(
                 path.read_text(
                     encoding="utf-8"
                 )
             )
+        except RuntimeError:
+            raise
+
         except (
             OSError,
             UnicodeError,
@@ -277,9 +320,10 @@ class RecoveryService:
                 "new-installed",
                 "verified",
             )
-            or not isinstance(
-                data.get("rollback_dir"),
-                str,
+            or not self._valid_rollback_name(
+                data.get(
+                    "rollback_dir"
+                )
             )
             or not isinstance(
                 data.get("original_presence"),
@@ -307,6 +351,12 @@ class RecoveryService:
             / journal["rollback_dir"]
         )
 
+        harden_private_directory(
+            rollback_dir,
+            create=False,
+            code="RECOVERY_ROLLBACK_UNSAFE",
+        )
+
         # If verification completed before the crash, the new
         # active wallet is authoritative. Only cleanup remains.
         if journal["phase"] == "verified":
@@ -332,6 +382,12 @@ class RecoveryService:
                 self.pending_path
             ),
         }
+
+        for active in active_files.values():
+            if active.is_symlink():
+                raise RuntimeError(
+                    "RECOVERY_ACTIVE_FILE_UNSAFE"
+                )
 
         original_presence = (
             journal["original_presence"]
@@ -485,10 +541,21 @@ class RecoveryService:
     def _file_pending_info(
         self,
     ) -> dict | None:
-        if not self.pending_path.is_file():
+        if self.pending_path.is_symlink():
+            raise RuntimeError(
+                "RECOVERY_PENDING_FILE_UNSAFE"
+            )
+
+        if not self.pending_path.exists():
             return None
 
         try:
+            harden_private_file(
+                self.pending_path,
+                required=True,
+                code="RECOVERY_PENDING_FILE_UNSAFE",
+            )
+
             data = json.loads(
                 self.pending_path.read_text(
                     encoding="utf-8"
@@ -569,7 +636,10 @@ class RecoveryService:
                 "RECOVERY_ACTIVE_WALLET_INCOMPLETE"
             )
 
-        if self.activation_journal_path.exists():
+        if (
+            self.activation_journal_path.exists()
+            or self.activation_journal_path.is_symlink()
+        ):
             raise ValueError(
                 "RECOVERY_ACTIVATION_ALREADY_PENDING"
             )

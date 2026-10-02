@@ -14,6 +14,11 @@ from pathlib import Path
 import tempfile
 from urllib.parse import urlparse
 
+from .filesystem_integrity import (
+    harden_private_directory,
+    harden_private_file,
+)
+
 
 CONFIG_VERSION = 1
 DEFAULT_RPC_URL = "http://127.0.0.1:18443"
@@ -216,14 +221,36 @@ class ConfigService:
         )
 
     def load(self) -> RuntimeConfig:
+        if self.path.is_symlink():
+            raise ValueError(
+                "CONFIG_FILE_UNSAFE"
+            )
+
         if not self.path.exists():
             return self.defaults()
 
         try:
+            harden_private_directory(
+                self.path.parent,
+                create=False,
+                code="CONFIG_DIRECTORY_UNSAFE",
+            )
+
+            harden_private_file(
+                self.path,
+                required=True,
+                code="CONFIG_FILE_UNSAFE",
+            )
+
             raw = self.path.read_text(
                 encoding="utf-8"
             )
             data = json.loads(raw)
+        except RuntimeError as exc:
+            raise ValueError(
+                str(exc)
+            ) from None
+
         except (
             OSError,
             UnicodeError,
@@ -242,6 +269,11 @@ class ConfigService:
         Load the validated runtime configuration, creating a private default
         file on first run.  Existing invalid files are never overwritten.
         """
+        if self.path.is_symlink():
+            raise ValueError(
+                "CONFIG_FILE_UNSAFE"
+            )
+
         if self.path.exists():
             return self.load()
 
@@ -257,18 +289,27 @@ class ConfigService:
             config
         )
 
-        self.path.parent.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
         try:
-            os.chmod(
+            harden_private_directory(
                 self.path.parent,
-                0o700,
+                create=True,
+                code="CONFIG_DIRECTORY_UNSAFE",
             )
-        except OSError:
-            pass
+
+            if (
+                self.path.exists()
+                or self.path.is_symlink()
+            ):
+                harden_private_file(
+                    self.path,
+                    required=True,
+                    code="CONFIG_FILE_UNSAFE",
+                )
+
+        except RuntimeError as exc:
+            raise ValueError(
+                str(exc)
+            ) from None
 
         payload = (
             json.dumps(
@@ -326,12 +367,16 @@ class ConfigService:
             temporary_path = None
 
             try:
-                os.chmod(
+                harden_private_file(
                     self.path,
-                    0o600,
+                    required=True,
+                    code="CONFIG_FILE_UNSAFE",
                 )
-            except OSError:
-                pass
+
+            except RuntimeError as exc:
+                raise ValueError(
+                    str(exc)
+                ) from None
 
             return validated
 
