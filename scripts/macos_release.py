@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import stat
 import subprocess
@@ -101,6 +102,19 @@ def parse_codesign_details(text: str) -> dict[str, list[str]]:
 
         key, value = line.split("=", 1)
         values.setdefault(key, []).append(value)
+
+        if line.startswith("CodeDirectory "):
+            match = re.search(
+                r"(?:^|\\s)flags=([^\\s]+)",
+                line,
+            )
+            if match:
+                values.setdefault(
+                    "flags",
+                    [],
+                ).append(
+                    match.group(1)
+                )
 
     return values
 
