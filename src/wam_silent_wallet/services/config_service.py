@@ -120,11 +120,7 @@ class ConfigService:
 
         if (
             parsed.scheme != "http"
-            or parsed.hostname not in {
-                "127.0.0.1",
-                "localhost",
-                "::1",
-            }
+            or parsed.hostname != "127.0.0.1"
             or parsed.username is not None
             or parsed.password is not None
             or parsed.query
