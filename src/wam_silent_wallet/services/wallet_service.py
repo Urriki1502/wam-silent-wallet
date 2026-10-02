@@ -658,3 +658,84 @@ class WalletService:
         finally:
             wallet.close()
             ring.close()
+
+    def background_sync_snapshot(
+        self,
+        passphrase: str,
+        chain,
+    ) -> dict:
+        """
+        Perform one scanner pass and return the complete read-only snapshot
+        needed by the background synchronization layer.
+
+        One wallet instance owns the scanner/database connection for the whole
+        cycle so Dashboard and Payments data come from the same verified tip.
+        """
+        ring, wallet = self._open(
+            passphrase
+        )
+
+        try:
+            metrics = wallet.scan(
+                chain,
+                mempool=True,
+            )
+
+            balance = wallet.get_balance()
+
+            raw_payments = [
+                item
+                for item in wallet.list_payments(
+                    limit=1000,
+                    offset=0,
+                )
+                if item["label"] != 0
+            ]
+
+            payments = []
+
+            for item in reversed(
+                raw_payments
+            ):
+                atoms = item["atoms"]
+
+                payments.append(
+                    {
+                        "txid": item["txid"],
+                        "vout": item["vout"],
+                        "atoms": atoms,
+                        "amount_wam": (
+                            atoms
+                            / ATOMS_PER_WAM
+                        ),
+                        "label": item["label"],
+                        "epoch": item["epoch"],
+                        "received": item["received"],
+                        "spent": item["spent"],
+                        "confirmations": item["confirmations"],
+                    }
+                )
+
+            history = wallet.history(
+                limit=1000,
+                offset=0,
+            )
+
+            return {
+                "scan_blocks": metrics.blocks,
+                "scan_transactions": metrics.transactions,
+                "scan_candidates": metrics.candidates,
+                "scan_rollback": metrics.rollback,
+                "confirmed_atoms": balance["confirmed_atoms"],
+                "available_atoms": balance["available_atoms"],
+                "unconfirmed_atoms": balance["unconfirmed_atoms"],
+                "pending_spent_atoms": balance["pending_spent_atoms"],
+                "payments_count": len(payments),
+                "history_count": len(history),
+                "payments": payments,
+            }
+
+        finally:
+            wallet.close()
+            ring.close()
+
