@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import hashlib
 import shutil
 import tempfile
@@ -11,7 +12,7 @@ from .recovery_service import RecoveryService
 from .scanner_snapshot import build_scanner_snapshot
 
 from wam_sp.api import SilentWallet
-from wam_sp.keystore import Keyring, load_private, save_private
+from wam_sp.keystore import MAGIC, Keyring, load_private, save_private
 from wam_sp.backup import (
     create as create_recovery,
     restore as restore_recovery,
@@ -84,6 +85,19 @@ class WalletService:
     def _validate_startup_fileset(
         self,
     ):
+        if self.data_dir.is_symlink():
+            raise RuntimeError(
+                "WALLET_DATA_DIR_SYMLINK"
+            )
+
+        if (
+            self.data_dir.exists()
+            and not self.data_dir.is_dir()
+        ):
+            raise RuntimeError(
+                "WALLET_DATA_DIR_INVALID"
+            )
+
         for path in (
             self.db_path,
             self.keys_path,
@@ -101,11 +115,103 @@ class WalletService:
             self.keys_path.exists()
         )
 
-        # A wallet is either completely absent (first run) or
-        # must have both authenticated key material and database.
         if db_exists != keys_exist:
             raise RuntimeError(
                 "WALLET_FILESET_INCOMPLETE"
+            )
+
+        if not db_exists:
+            return
+
+        if (
+            not self.db_path.is_file()
+            or not self.keys_path.is_file()
+        ):
+            raise RuntimeError(
+                "WALLET_FILESET_NOT_REGULAR"
+            )
+
+    def _validate_database_preflight(
+        self,
+    ):
+        try:
+            size = self.db_path.stat().st_size
+
+            if size < 16:
+                raise RuntimeError(
+                    "WALLET_DATABASE_CORRUPT"
+                )
+
+            with self.db_path.open(
+                "rb"
+            ) as handle:
+                header = handle.read(
+                    16
+                )
+
+            if header != (b"SQLite format 3" + bytes([0])):
+                raise RuntimeError(
+                    "WALLET_DATABASE_CORRUPT"
+                )
+
+            uri = (
+                "file:"
+                + self.db_path.as_posix()
+                + "?mode=ro"
+            )
+
+            db = sqlite3.connect(
+                uri,
+                uri=True,
+                timeout=1,
+            )
+
+            try:
+                rows = db.execute(
+                    "PRAGMA quick_check"
+                ).fetchall()
+
+            finally:
+                db.close()
+
+            if rows != [("ok",)]:
+                raise RuntimeError(
+                    "WALLET_DATABASE_CORRUPT"
+                )
+
+        except RuntimeError:
+            raise
+
+        except (
+            OSError,
+            sqlite3.DatabaseError,
+        ) as exc:
+            raise RuntimeError(
+                "WALLET_DATABASE_CORRUPT"
+            ) from exc
+
+    def _validate_keys_preflight(
+        self,
+    ):
+        try:
+            envelope = load_private(
+                self.keys_path
+            )
+
+        except (
+            OSError,
+            ValueError,
+        ) as exc:
+            raise RuntimeError(
+                "WALLET_KEYS_CORRUPT_OR_UNSAFE"
+            ) from exc
+
+        if (
+            len(envelope) < 52
+            or envelope[:8] != MAGIC
+        ):
+            raise RuntimeError(
+                "WALLET_KEYS_CORRUPT"
             )
 
     def exists(self) -> bool:
@@ -135,6 +241,12 @@ class WalletService:
 
         if not self.exists():
             raise ValueError("WALLET_NOT_FOUND")
+
+        # Deep integrity checks belong at the wallet-open boundary.
+        # Construction/startup performs structural checks only so
+        # recovery machinery can inspect and repair interrupted state.
+        self._validate_keys_preflight()
+        self._validate_database_preflight()
 
         encrypted = load_private(self.keys_path)
 

@@ -164,3 +164,63 @@ time.sleep(120)
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RuntimeLockFilesystemTests(
+    unittest.TestCase
+):
+    def test_lock_symlink_is_rejected(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+
+            target = (
+                root
+                / "target"
+            )
+
+            target.write_text(
+                "do-not-touch"
+            )
+
+            lock_path = (
+                root
+                / RuntimeDataLock.LOCK_NAME
+            )
+
+            lock_path.symlink_to(
+                target
+            )
+
+            lock = RuntimeDataLock(
+                root
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "WALLET_RUNTIME_LOCK_OPEN_FAILED",
+            ):
+                lock.acquire()
+
+            self.assertEqual(
+                target.read_text(),
+                "do-not-touch",
+            )
+
+    def test_lock_directory_is_rejected(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+
+            (
+                root
+                / RuntimeDataLock.LOCK_NAME
+            ).mkdir()
+
+            lock = RuntimeDataLock(
+                root
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "WALLET_RUNTIME_LOCK_OPEN_FAILED",
+            ):
+                lock.acquire()
