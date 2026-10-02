@@ -156,6 +156,56 @@ class BackgroundSyncServiceTests(
             repr(service.__dict__),
         )
 
+    def test_accepts_mutable_secret_lease(self):
+        clock = FakeClock()
+        node = FakeNode()
+        wallet = FakeWallet()
+
+        service = BackgroundSyncService(
+            wallet,
+            node,
+            clock=clock,
+        )
+
+        secret = bytearray(
+            b"correct horse battery staple"
+        )
+
+        result = service.cycle(
+            secret
+        )
+
+        self.assertEqual(
+            result.status,
+            "synced",
+        )
+
+        self.assertIs(
+            wallet.seen_passphrases[0],
+            secret,
+        )
+
+    def test_empty_mutable_secret_is_locked(self):
+        service = BackgroundSyncService(
+            FakeWallet(),
+            FakeNode(),
+            clock=FakeClock(),
+        )
+
+        result = service.cycle(
+            bytearray()
+        )
+
+        self.assertEqual(
+            result.status,
+            "locked",
+        )
+
+        self.assertEqual(
+            result.error_code,
+            "SESSION_LOCKED",
+        )
+
     def test_node_not_ready_uses_exponential_backoff(self):
         clock = FakeClock()
         node = FakeNode(
