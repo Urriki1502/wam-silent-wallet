@@ -3,6 +3,8 @@ from pathlib import Path
 from wam_sdk import Config, CookieAuth, Network, WamClient
 from wam_sp.adapters.sdk import SDKChain
 
+from .config_service import RuntimeConfig
+
 
 class NodeService:
     def __init__(
@@ -38,6 +40,23 @@ class NodeService:
         self._broadcast_chain = SDKChain(
             self.client,
             allow_broadcast=True,
+        )
+
+    @classmethod
+    def from_runtime_config(
+        cls,
+        runtime_config: RuntimeConfig,
+    ):
+        if runtime_config.network != "regtest":
+            raise ValueError(
+                "CONFIG_NETWORK"
+            )
+
+        return cls(
+            rpc_url=runtime_config.rpc_url,
+            cookie_path=Path(
+                runtime_config.cookie_path
+            ),
         )
 
     def snapshot(self) -> dict:
