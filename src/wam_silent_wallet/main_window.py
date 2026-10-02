@@ -27,6 +27,7 @@ from .pages.payments_page import PaymentsPage
 from .pages.node_page import NodePage
 from .pages.backup_page import BackupPage
 from .pages.settings_page import SettingsPage
+from .pages.privacy_page import PrivacyPage
 
 from .ui_components import (
     BrandMark,
@@ -91,6 +92,7 @@ class MainWindow(QMainWindow):
         self.node_page = None
         self.send_page = None
         self.settings_page = None
+        self.privacy_page = None
 
         self.root_stack = (
             QStackedWidget()
@@ -170,6 +172,7 @@ class MainWindow(QMainWindow):
         self.node_page = None
         self.send_page = None
         self.settings_page = None
+        self.privacy_page = None
 
     def closeEvent(self, event):
         self._stop_background_sync()
@@ -597,6 +600,7 @@ class MainWindow(QMainWindow):
                 "Send",
                 "Payments",
                 "Node",
+                "Privacy",
                 "Backup",
                 "Settings",
             ]
@@ -649,6 +653,14 @@ class MainWindow(QMainWindow):
 
         pages.addWidget(
             self.node_page
+        )
+
+        self.privacy_page = PrivacyPage(
+            self.node_service
+        )
+
+        pages.addWidget(
+            self.privacy_page
         )
 
         pages.addWidget(
