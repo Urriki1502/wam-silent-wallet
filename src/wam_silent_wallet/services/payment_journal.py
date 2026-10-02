@@ -559,6 +559,37 @@ class PaymentJournalService:
             payload,
         )
 
+    def rollback_broadcasting(
+        self,
+        token,
+    ):
+        loaded = self._load_payload(
+            token
+        )
+
+        if loaded is None:
+            raise RuntimeError(
+                "PAYMENT_JOURNAL_NOT_FOUND"
+            )
+
+        payload, _ = loaded
+
+        if payload[
+            "state"
+        ] != "broadcasting":
+            raise RuntimeError(
+                "PAYMENT_JOURNAL_TRANSITION"
+            )
+
+        payload[
+            "state"
+        ] = "signed"
+
+        self._write_atomic(
+            self._path(token),
+            payload,
+        )
+
     def load(
         self,
         token,

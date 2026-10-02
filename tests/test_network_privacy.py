@@ -219,6 +219,59 @@ class NetworkPrivacyServiceTests(
             result.warnings,
         )
 
+    def test_direct_route_is_broadcast_safe(self):
+        result = NetworkPrivacyService(
+            _FakeNode()
+        ).assert_broadcast_safe()
+
+        self.assertEqual(
+            result.mode,
+            "direct",
+        )
+
+    def test_mixed_route_is_blocked_for_broadcast(self):
+        class MixedNode(_FakeNode):
+            def network_info(self):
+                return {
+                    "networkactive": True,
+                    "networks": [
+                        {
+                            "name": "ipv4",
+                            "reachable": True,
+                            "proxy": "",
+                        },
+                        {
+                            "name": "onion",
+                            "reachable": True,
+                            "proxy": "127.0.0.1:9050",
+                        },
+                    ],
+                }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "PRIVACY_ROUTE_AMBIGUOUS",
+        ):
+            NetworkPrivacyService(
+                MixedNode()
+            ).assert_broadcast_safe()
+
+    def test_inactive_network_is_blocked_for_broadcast(self):
+        class InactiveNode(_FakeNode):
+            def network_info(self):
+                return {
+                    "networkactive": False,
+                    "networks": [],
+                }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "PRIVACY_NETWORK_INACTIVE",
+        ):
+            NetworkPrivacyService(
+                InactiveNode()
+            ).assert_broadcast_safe()
+
     def test_invalid_network_payload_is_rejected(self):
         with self.assertRaisesRegex(
             ValueError,

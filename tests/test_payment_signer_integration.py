@@ -66,6 +66,7 @@ class FakeWallet:
         self.scan_calls = []
         self.broadcast_calls = []
         self.wallet = FakeCoordinator()
+        self.required_closed_ring = None
 
     def scan(
         self,
@@ -82,6 +83,15 @@ class FakeWallet:
         token,
         chain,
     ):
+        if (
+            self.required_closed_ring
+            is not None
+            and not self.required_closed_ring.closed
+        ):
+            raise AssertionError(
+                "SIGNING_KEYRING_STILL_OPEN"
+            )
+
         self.broadcast_calls.append(
             (
                 signed_psbt,
@@ -105,6 +115,9 @@ class FakeWalletService:
         self.ring = ring
         self.wallet = wallet
         self.open_calls = []
+        self.wallet.required_closed_ring = (
+            ring
+        )
 
     def assert_spend_ready(
         self,
@@ -116,7 +129,7 @@ class FakeWalletService:
         passphrase,
     ):
         self.open_calls.append(
-            passphrase
+            ("legacy", passphrase)
         )
 
         return (
@@ -124,11 +137,56 @@ class FakeWalletService:
             self.wallet,
         )
 
+    def _open_scanner_wallet(
+        self,
+        passphrase,
+    ):
+        self.open_calls.append(
+            ("scanner", passphrase)
+        )
+
+        return self.wallet
+
+    def _open_keyring(
+        self,
+        passphrase,
+    ):
+        self.open_calls.append(
+            ("keyring", passphrase)
+        )
+
+        return self.ring
+
+
+class _Cookie:
+    def is_file(self):
+        return True
+
 
 class FakeNodeService:
+    rpc_url = "http://127.0.0.1:18443"
+    cookie_path = _Cookie()
+
     def __init__(self):
         self.scan_chain = object()
         self.send_chain = object()
+
+    def network_info(self):
+        return {
+            "networkactive": True,
+            "networks": [
+                {
+                    "name": "ipv4",
+                    "reachable": True,
+                    "proxy": "",
+                },
+                {
+                    "name": "onion",
+                    "reachable": False,
+                    "proxy": "",
+                },
+            ],
+        }
 
     def scanner_chain(self):
         return self.scan_chain
@@ -272,7 +330,10 @@ class PaymentSignerIntegrationTests(
 
         self.assertEqual(
             wallet_service.open_calls,
-            ["secret"],
+            [
+                ("scanner", "secret"),
+                ("keyring", "secret"),
+            ],
         )
 
         self.assertEqual(
@@ -570,6 +631,9 @@ class NodeFailurePaymentTests(
             token,
             chain,
         ):
+            wallet.wallet.state = (
+                "uncertain"
+            )
             raise ConnectionError(
                 "socket closed"
             )
@@ -650,6 +714,17 @@ class FakePaymentJournal:
             )
         )
 
+    def rollback_broadcasting(
+        self,
+        token,
+    ):
+        self.calls.append(
+            (
+                "rollback",
+                token,
+            )
+        )
+
 
 class PaymentJournalIntegrationTests(
     unittest.TestCase
@@ -717,6 +792,64 @@ class PaymentJournalIntegrationTests(
             ),
         )
 
+    def test_prebroadcast_failure_is_not_marked_uncertain(self):
+        ring = FakeRing()
+        wallet = FakeWallet()
+        signer = FakeSignerService()
+        journal = FakePaymentJournal()
+
+        def reject_before_send(
+            signed_psbt,
+            token,
+            chain,
+        ):
+            raise ValueError(
+                "MEMPOOL_REJECTED"
+            )
+
+        wallet.broadcast = (
+            reject_before_send
+        )
+
+        service = PaymentService(
+            FakeWalletService(
+                ring,
+                wallet,
+            ),
+            FakeNodeService(),
+            signer_service=signer,
+            journal_service=journal,
+        )
+
+        review = make_review()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "MEMPOOL_REJECTED",
+        ):
+            service.broadcast(
+                "secret",
+                review,
+            )
+
+        self.assertEqual(
+            journal.calls[-1],
+            (
+                "rollback",
+                "draft-token",
+            ),
+        )
+
+        self.assertNotIn(
+            (
+                "transition",
+                "draft-token",
+                "uncertain",
+                None,
+            ),
+            journal.calls,
+        )
+
     def test_uncertain_broadcast_is_persisted(self):
         ring = FakeRing()
         wallet = FakeWallet()
@@ -728,6 +861,9 @@ class PaymentJournalIntegrationTests(
             token,
             chain,
         ):
+            wallet.wallet.state = (
+                "uncertain"
+            )
             raise ConnectionError(
                 "response lost"
             )

@@ -6,6 +6,7 @@ from wam_sp.wallet import Intent
 
 from .fee_service import FeePolicyService
 from .payment_journal import PaymentJournalService
+from .privacy_service import NetworkPrivacyService
 from .signer_service import SignerService
 from .transaction_manifest import SigningManifest
 
@@ -76,6 +77,11 @@ class PaymentService:
         self.fees = FeePolicyService(
             node_service
         )
+        self.privacy = (
+            NetworkPrivacyService(
+                node_service
+            )
+        )
 
         if journal_service is not None:
             self.journal = journal_service
@@ -116,6 +122,66 @@ class PaymentService:
             )
         except Exception:
             pass
+
+    @staticmethod
+    def _reservation_states(
+        wallet,
+        token,
+    ):
+        scanner = getattr(
+            wallet,
+            "scanner",
+            None,
+        )
+        store = getattr(
+            scanner,
+            "store",
+            None,
+        )
+        db = getattr(
+            store,
+            "db",
+            None,
+        )
+
+        if db is not None:
+            try:
+                rows = db.execute(
+                    """
+                    SELECT DISTINCT state
+                    FROM reservations
+                    WHERE token=?
+                    """,
+                    (token,),
+                ).fetchall()
+
+                return {
+                    row[0]
+                    for row in rows
+                }
+            except Exception:
+                return None
+
+        coordinator = getattr(
+            wallet,
+            "wallet",
+            None,
+        )
+        state = getattr(
+            coordinator,
+            "state",
+            None,
+        )
+
+        if isinstance(
+            state,
+            str,
+        ):
+            return {
+                state
+            }
+
+        return None
 
     @staticmethod
     def _assert_review_integrity(
@@ -232,9 +298,11 @@ class PaymentService:
             2,
         )
 
-        ring, wallet = (
+        wallet = (
             self.wallet_service
-            ._open(passphrase)
+            ._open_scanner_wallet(
+                passphrase
+            )
         )
 
         proposal = None
@@ -372,16 +440,17 @@ class PaymentService:
 
         finally:
             wallet.close()
-            ring.close()
 
     def cancel(
         self,
         passphrase: str,
         review: PaymentReview,
     ):
-        ring, wallet = (
+        wallet = (
             self.wallet_service
-            ._open(passphrase)
+            ._open_scanner_wallet(
+                passphrase
+            )
         )
 
         try:
@@ -390,7 +459,6 @@ class PaymentService:
             )
         finally:
             wallet.close()
-            ring.close()
 
     def broadcast(
         self,
@@ -413,9 +481,11 @@ class PaymentService:
             for item in review.manifest.intents
         )
 
-        ring, wallet = (
+        wallet = (
             self.wallet_service
-            ._open(passphrase)
+            ._open_scanner_wallet(
+                passphrase
+            )
         )
 
         try:
@@ -428,29 +498,38 @@ class PaymentService:
                 mempool=True,
             )
 
-            # Re-check immediately before invoking the signer.
-            # A mutable nested proposal dictionary must never
-            # cross the signing boundary unnoticed.
+            self.privacy.assert_broadcast_safe()
+
             self._assert_review_integrity(
                 review
             )
 
-            signed_psbt = (
-                self.signer
-                .sign(
-                    keyring=ring,
-                    proposal=review.proposal,
-                    approval_manifest=(
-                        review.manifest
-                    ),
-                    approved_intents=(
-                        approved_intents
-                    ),
-                    approved_max_fee=(
-                        review.manifest.fee
-                    ),
+            ring = (
+                self.wallet_service
+                ._open_keyring(
+                    passphrase
                 )
             )
+
+            try:
+                signed_psbt = (
+                    self.signer
+                    .sign(
+                        keyring=ring,
+                        proposal=review.proposal,
+                        approval_manifest=(
+                            review.manifest
+                        ),
+                        approved_intents=(
+                            approved_intents
+                        ),
+                        approved_max_fee=(
+                            review.manifest.fee
+                        ),
+                    )
+                )
+            finally:
+                ring.close()
 
             # Persist signed transaction material before the
             # reservation crosses the irreversible signed boundary.
@@ -487,6 +566,8 @@ class PaymentService:
                 review
             )
 
+            self.privacy.assert_broadcast_safe()
+
             # Signature material already exists here.
             # A transport/node failure during broadcast has an
             # ambiguous outcome: the node may have accepted the
@@ -511,6 +592,25 @@ class PaymentService:
 
 
             except Exception as exc:
+                reservation_states = (
+                    self._reservation_states(
+                        wallet,
+                        review.manifest
+                        .reservation_token,
+                    )
+                )
+
+                if reservation_states == {
+                    "signed"
+                }:
+                    if self.journal is not None:
+                        self.journal.rollback_broadcasting(
+                            review.manifest
+                            .reservation_token
+                        )
+
+                    raise
+
                 if self.journal is not None:
                     try:
                         self.journal.transition(
@@ -574,4 +674,3 @@ class PaymentService:
 
         finally:
             wallet.close()
-            ring.close()

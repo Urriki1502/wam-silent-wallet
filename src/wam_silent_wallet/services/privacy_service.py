@@ -248,7 +248,19 @@ class NetworkPrivacyService:
             )
         )
 
+        network_active = bool(
+            network_info.get(
+                "networkactive",
+                False,
+            )
+        )
+
         warnings = []
+
+        if not network_active:
+            warnings.append(
+                "NETWORK_INACTIVE"
+            )
 
         if not rpc_loopback:
             warnings.append(
@@ -311,11 +323,8 @@ class NetworkPrivacyService:
             cookie_available=bool(
                 cookie_available
             ),
-            network_active=bool(
-                network_info.get(
-                    "networkactive",
-                    True,
-                )
+            network_active=(
+                network_active
             ),
             onion_reachable=(
                 onion_reachable
@@ -336,6 +345,39 @@ class NetworkPrivacyService:
                 warnings
             ),
         )
+
+    def assert_broadcast_safe(
+        self,
+    ) -> NetworkPrivacySnapshot:
+        snapshot = self.snapshot()
+
+        if not snapshot.network_active:
+            raise ValueError(
+                "PRIVACY_NETWORK_INACTIVE"
+            )
+
+        if (
+            not snapshot.rpc_loopback
+            or not snapshot.cookie_available
+        ):
+            raise ValueError(
+                "PRIVACY_RPC_BOUNDARY"
+            )
+
+        if (
+            snapshot.mode
+            in {
+                "tor_available_mixed",
+                "proxy_partial",
+            }
+            or "ONION_PROXY_MISSING"
+            in snapshot.warnings
+        ):
+            raise ValueError(
+                "PRIVACY_ROUTE_AMBIGUOUS"
+            )
+
+        return snapshot
 
     def snapshot(
         self,

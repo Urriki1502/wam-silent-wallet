@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import hashlib
+import json
 import shutil
 import tempfile
 from datetime import datetime
@@ -15,6 +16,11 @@ from .payment_reconciliation import PaymentReconciliationService
 from .filesystem_integrity import (
     harden_private_directory,
     harden_private_file,
+)
+from .key_protection import (
+    KEY_KDF_MAGIC,
+    atomic_replace_keyring,
+    restore_keyring,
 )
 
 from wam_sp.api import SilentWallet
@@ -250,7 +256,11 @@ class WalletService:
 
         if (
             len(envelope) < 52
-            or envelope[:8] != MAGIC
+            or envelope[:8]
+            not in {
+                MAGIC,
+                KEY_KDF_MAGIC,
+            }
         ):
             raise RuntimeError(
                 "WALLET_KEYS_CORRUPT"
@@ -278,33 +288,305 @@ class WalletService:
 
         return value
 
+    def _database_wallet_identity(
+        self,
+    ) -> dict:
+        uri = (
+            "file:"
+            + self.db_path.as_posix()
+            + "?mode=ro"
+        )
+
+        try:
+            db = sqlite3.connect(
+                uri,
+                uri=True,
+                timeout=1,
+            )
+
+            try:
+                row = db.execute(
+                    """
+                    SELECT value
+                    FROM meta
+                    WHERE key='identity'
+                    """
+                ).fetchone()
+            finally:
+                db.close()
+
+            if row is None:
+                raise ValueError
+
+            value = json.loads(
+                row[0]
+            )
+
+            if (
+                not isinstance(
+                    value,
+                    dict,
+                )
+                or value.get(
+                    "version"
+                ) != 2
+                or not isinstance(
+                    value.get(
+                        "accounts"
+                    ),
+                    list,
+                )
+            ):
+                raise ValueError
+
+            return value
+
+        except (
+            OSError,
+            sqlite3.DatabaseError,
+            ValueError,
+            TypeError,
+        ) as exc:
+            raise RuntimeError(
+                "WALLET_IDENTITY_CORRUPT"
+            ) from exc
+
+    def _reconcile_keyring_metadata(
+        self,
+        ring: Keyring,
+    ) -> bool:
+        stored = (
+            self._database_wallet_identity()
+        )
+
+        current_accounts = {
+            account.account_id: account
+            for account in ring.accounts()
+        }
+
+        stored_accounts = {}
+
+        for record in stored[
+            "accounts"
+        ]:
+            if (
+                not isinstance(
+                    record,
+                    dict,
+                )
+                or not isinstance(
+                    record.get("id"),
+                    str,
+                )
+                or record["id"]
+                in stored_accounts
+            ):
+                raise RuntimeError(
+                    "WALLET_IDENTITY_MISMATCH"
+                )
+
+            stored_accounts[
+                record["id"]
+            ] = record
+
+        if (
+            set(current_accounts)
+            != set(stored_accounts)
+        ):
+            raise RuntimeError(
+                "WALLET_IDENTITY_MISMATCH"
+            )
+
+        changed = False
+
+        for identifier, account in (
+            current_accounts.items()
+        ):
+            current = account.identity()
+            stored_account = (
+                stored_accounts[
+                    identifier
+                ]
+            )
+
+            for field in (
+                "id",
+                "epoch",
+                "scan_public",
+                "spend_public",
+                "birthday",
+            ):
+                if (
+                    stored_account.get(
+                        field
+                    )
+                    != current.get(
+                        field
+                    )
+                ):
+                    raise RuntimeError(
+                        "WALLET_IDENTITY_MISMATCH"
+                    )
+
+            labels = stored_account.get(
+                "labels"
+            )
+
+            if (
+                not isinstance(
+                    labels,
+                    list,
+                )
+                or len(labels)
+                != len(set(labels))
+                or any(
+                    type(label) is not int
+                    or not 1 <= label < 2**32
+                    for label in labels
+                )
+            ):
+                raise RuntimeError(
+                    "WALLET_IDENTITY_MISMATCH"
+                )
+
+            stored_labels = set(
+                labels
+            )
+            current_labels = set(
+                account.labels
+            )
+
+            if not current_labels <= stored_labels:
+                raise RuntimeError(
+                    "WALLET_IDENTITY_MISMATCH"
+                )
+
+            for label in sorted(
+                stored_labels
+                - current_labels
+            ):
+                ring.add_label(
+                    account.epoch,
+                    label,
+                )
+                changed = True
+
+        final_accounts = {
+            account.account_id: (
+                account.identity()
+            )
+            for account in ring.accounts()
+        }
+
+        if final_accounts != {
+            identifier: stored_accounts[
+                identifier
+            ]
+            for identifier in final_accounts
+        }:
+            raise RuntimeError(
+                "WALLET_IDENTITY_MISMATCH"
+            )
+
+        return changed
+
+    def _persist_keyring(
+        self,
+        ring: Keyring,
+        passphrase,
+    ):
+        try:
+            atomic_replace_keyring(
+                self.keys_path,
+                ring,
+                self._password_bytes(
+                    passphrase
+                ),
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "WALLET_KEYS_REWRITE_FAILED"
+            ) from exc
+
     def _open(self, passphrase):
         password = self._password_bytes(passphrase)
 
         if not self.exists():
             raise ValueError("WALLET_NOT_FOUND")
 
-        # Re-assert structural + filesystem security immediately
-        # before private key / database material is consumed.
         self._validate_startup_fileset()
-
-        # Deep integrity checks belong at the wallet-open boundary.
         self._validate_keys_preflight()
         self._validate_database_preflight()
 
-        encrypted = load_private(self.keys_path)
-
-        ring = Keyring.restore(
-            encrypted,
-            password,
+        encrypted = load_private(
+            self.keys_path
         )
 
-        wallet = SilentWallet(
-            self.db_path,
-            ring.accounts(),
+        ring = None
+        wallet = None
+
+        try:
+            ring, legacy_source = (
+                restore_keyring(
+                    encrypted,
+                    password,
+                )
+            )
+
+            metadata_recovered = (
+                self._reconcile_keyring_metadata(
+                    ring
+                )
+            )
+
+            wallet = SilentWallet(
+                self.db_path,
+                ring.accounts(),
+            )
+
+            if (
+                legacy_source
+                or metadata_recovered
+            ):
+                self._persist_keyring(
+                    ring,
+                    password,
+                )
+
+            return ring, wallet
+
+        except Exception:
+            if wallet is not None:
+                wallet.close()
+
+            if ring is not None:
+                ring.close()
+
+            raise
+
+    def _open_scanner_wallet(
+        self,
+        passphrase,
+    ):
+        ring, wallet = self._open(
+            passphrase
         )
 
-        return ring, wallet
+        ring.close()
+
+        return wallet
+
+    def _open_keyring(
+        self,
+        passphrase,
+    ):
+        ring, wallet = self._open(
+            passphrase
+        )
+
+        wallet.close()
+
+        return ring
 
     def verify_passphrase(self, passphrase: SecretMaterial) -> dict:
         """
@@ -328,19 +610,22 @@ class WalletService:
             ring.close()
 
     def receive_address(self, passphrase: SecretMaterial) -> str:
-        ring, wallet = self._open(passphrase)
+        wallet = self._open_scanner_wallet(
+            passphrase
+        )
 
         try:
             return wallet.get_silent_address()
         finally:
             wallet.close()
-            ring.close()
 
     def receive_addresses(self, passphrase: SecretMaterial) -> list[dict]:
         """
         Return the base address plus all registered labeled addresses.
         """
-        ring, wallet = self._open(passphrase)
+        wallet = self._open_scanner_wallet(
+            passphrase
+        )
 
         try:
             result = [
@@ -384,7 +669,6 @@ class WalletService:
 
         finally:
             wallet.close()
-            ring.close()
 
     def create_labeled_address(
         self,
@@ -411,10 +695,6 @@ class WalletService:
 
         ring, wallet = self._open(passphrase)
 
-        temporary_keys = self.keys_path.with_name(
-            ".keys.wsp.next"
-        )
-
         try:
             account = max(
                 ring.accounts(),
@@ -428,43 +708,23 @@ class WalletService:
             if next_label >= 2**32:
                 raise ValueError("LABEL_LIMIT")
 
-            # Prepare updated encrypted key metadata first.
             ring.add_label(
                 account.epoch,
                 next_label,
             )
 
-            encrypted = ring.backup(
-                self._password_bytes(passphrase),
-            )
-
-            temporary_keys.unlink(
-                missing_ok=True
-            )
-
-            save_private(
-                temporary_keys,
-                encrypted,
-            )
-
-            # Update scanner/database metadata.
+            # Database metadata commits first. If termination happens
+            # before keys.wsp replacement, _open() reconciles the
+            # committed label and rewrites keys.wsp deterministically.
             created = wallet.create_labeled_address(
                 name=name,
                 epoch=account.epoch,
                 label=next_label,
             )
 
-            # Only replace the current encrypted key backup
-            # after wallet metadata succeeded.
-            os.replace(
-                temporary_keys,
-                self.keys_path,
-            )
-
-            harden_private_file(
-                self.keys_path,
-                required=True,
-                code="WALLET_KEYS_UNSAFE",
+            self._persist_keyring(
+                ring,
+                passphrase,
             )
 
             return {
@@ -475,10 +735,6 @@ class WalletService:
             }
 
         finally:
-            temporary_keys.unlink(
-                missing_ok=True
-            )
-
             wallet.close()
             ring.close()
 
@@ -723,8 +979,10 @@ class WalletService:
         passphrase: SecretMaterial,
         chain,
     ) -> dict:
-        ring, wallet = self._open(
-            passphrase
+        wallet = (
+            self._open_scanner_wallet(
+                passphrase
+            )
         )
 
         try:
@@ -738,7 +996,6 @@ class WalletService:
 
         finally:
             wallet.close()
-            ring.close()
 
     def validate_shutdown_integrity(
         self,
@@ -843,8 +1100,10 @@ class WalletService:
         passphrase: SecretMaterial,
         chain,
     ) -> dict:
-        ring, wallet = self._open(
-            passphrase
+        wallet = (
+            self._open_scanner_wallet(
+                passphrase
+            )
         )
 
         try:
@@ -860,7 +1119,6 @@ class WalletService:
 
         finally:
             wallet.close()
-            ring.close()
 
     def scan_snapshot(
         self,
