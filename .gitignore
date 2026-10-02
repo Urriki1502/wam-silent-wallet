@@ -236,3 +236,8 @@ recovery-pending.json
 .recovery-activation.json
 .recovery-rollback-*/
 .payment-journal/
+
+# Reproducible-release local build/cache output
+.repro-build/
+.release/
+vendor/wheelhouse/
