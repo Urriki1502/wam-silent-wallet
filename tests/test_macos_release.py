@@ -95,7 +95,7 @@ def test_release_signature_rejects_invalid_release_state(
     elif replacement.startswith("Signature="):
         lines = [
             replacement
-            if line.startswith("Signature=")
+            if line.startswith("Signature size=") or line.startswith("Signature=")
             else line
             for line in lines
         ]
