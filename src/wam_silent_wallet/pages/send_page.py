@@ -341,11 +341,6 @@ class SendPage(QWidget):
             .strip()
         )
 
-        password = (
-            self.session_service
-            .passphrase()
-        )
-
         if not destination:
             self.status.setText(
                 "Enter a Silent Payment destination."
@@ -387,16 +382,20 @@ class SendPage(QWidget):
         review = None
 
         try:
-            review = (
-                self.payment_service
-                .review(
-                    password,
-                    destination,
-                    amount,
-                    self.fee_tier
-                    .currentText(),
+            with (
+                self.session_service
+                .secret_lease()
+            ) as secret:
+                review = (
+                    self.payment_service
+                    .review(
+                        secret,
+                        destination,
+                        amount,
+                        self.fee_tier
+                        .currentText(),
+                    )
                 )
-            )
 
             amount_normalized = (
                 f"{atoms / 100_000_000:.8f}"
@@ -425,10 +424,14 @@ class SendPage(QWidget):
             )
 
             if answer != QMessageBox.Yes:
-                self.payment_service.cancel(
-                    password,
-                    review,
-                )
+                with (
+                    self.session_service
+                    .secret_lease()
+                ) as secret:
+                    self.payment_service.cancel(
+                        secret,
+                        review,
+                    )
 
                 review = None
 
@@ -445,13 +448,17 @@ class SendPage(QWidget):
 
             QApplication.processEvents()
 
-            result = (
-                self.payment_service
-                .broadcast(
-                    password,
-                    review,
+            with (
+                self.session_service
+                .secret_lease()
+            ) as secret:
+                result = (
+                    self.payment_service
+                    .broadcast(
+                        secret,
+                        review,
+                    )
                 )
-            )
 
             review = None
 
@@ -494,10 +501,14 @@ class SendPage(QWidget):
             # cleanup, a still-draft review can be released here.
             if review is not None:
                 try:
-                    self.payment_service.cancel(
-                        password,
-                        review,
-                    )
+                    with (
+                        self.session_service
+                        .secret_lease()
+                    ) as secret:
+                        self.payment_service.cancel(
+                            secret,
+                            review,
+                        )
                 except Exception:
                     pass
 
