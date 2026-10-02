@@ -738,4 +738,3 @@ class WalletService:
         finally:
             wallet.close()
             ring.close()
-
