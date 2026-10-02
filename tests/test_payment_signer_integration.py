@@ -507,3 +507,109 @@ class PaymentSignerIntegrationTests(
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NodeFailurePaymentTests(
+    unittest.TestCase
+):
+    def test_pre_sign_node_failure_releases_draft(self):
+        ring = FakeRing()
+        wallet = FakeWallet()
+        signer = FakeSignerService()
+
+        class DownNode(
+            FakeNodeService
+        ):
+            def scanner_chain(self):
+                raise RuntimeError(
+                    "NODE_UNAVAILABLE"
+                )
+
+        service = PaymentService(
+            FakeWalletService(
+                ring,
+                wallet,
+            ),
+            DownNode(),
+            signer_service=signer,
+        )
+
+        review = make_review()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "NODE_UNAVAILABLE",
+        ):
+            service.broadcast(
+                "secret",
+                review,
+            )
+
+        self.assertEqual(
+            signer.calls,
+            [],
+        )
+
+        self.assertEqual(
+            wallet.wallet.mark_signed_calls,
+            [],
+        )
+
+        self.assertEqual(
+            wallet.wallet.release_calls,
+            ["draft-token"],
+        )
+
+    def test_post_sign_node_failure_is_broadcast_uncertain(self):
+        ring = FakeRing()
+        wallet = FakeWallet()
+        signer = FakeSignerService()
+
+        def fail_broadcast(
+            signed_psbt,
+            token,
+            chain,
+        ):
+            raise ConnectionError(
+                "socket closed"
+            )
+
+        wallet.broadcast = (
+            fail_broadcast
+        )
+
+        service = PaymentService(
+            FakeWalletService(
+                ring,
+                wallet,
+            ),
+            FakeNodeService(),
+            signer_service=signer,
+        )
+
+        review = make_review()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "BROADCAST_OUTCOME_UNCERTAIN",
+        ):
+            service.broadcast(
+                "secret",
+                review,
+            )
+
+        self.assertEqual(
+            len(signer.calls),
+            1,
+        )
+
+        self.assertEqual(
+            wallet.wallet.mark_signed_calls,
+            ["draft-token"],
+        )
+
+        # Signed reservation must NOT become spendable again.
+        self.assertEqual(
+            wallet.wallet.release_calls,
+            [],
+        )

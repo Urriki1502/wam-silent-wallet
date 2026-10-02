@@ -441,13 +441,25 @@ class PaymentService:
                 review
             )
 
-            txid = wallet.broadcast(
-                signed_psbt,
-                review.manifest
-                .reservation_token,
-                self.node_service
-                .broadcast_chain(),
-            )
+            # Signature material already exists here.
+            # A transport/node failure during broadcast has an
+            # ambiguous outcome: the node may have accepted the
+            # transaction before the response was lost.
+            #
+            # Never expose this as an ordinary retryable failure.
+            try:
+                txid = wallet.broadcast(
+                    signed_psbt,
+                    review.manifest
+                    .reservation_token,
+                    self.node_service
+                    .broadcast_chain(),
+                )
+
+            except Exception as exc:
+                raise RuntimeError(
+                    "BROADCAST_OUTCOME_UNCERTAIN"
+                ) from exc
 
             return {
                 "txid": txid,
