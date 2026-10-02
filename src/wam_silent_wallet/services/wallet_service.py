@@ -36,9 +36,24 @@ class WalletService:
             and self.keys_path.exists()
         )
 
-    def _open(self, passphrase: str):
-        if not isinstance(passphrase, str) or not passphrase:
+    @staticmethod
+    def _password_bytes(secret) -> bytes:
+        if isinstance(secret, str):
+            value = secret.encode("utf-8")
+        elif isinstance(secret, bytes):
+            value = secret
+        elif isinstance(secret, (bytearray, memoryview)):
+            value = bytes(secret)
+        else:
             raise ValueError("PASSPHRASE_REQUIRED")
+
+        if not value:
+            raise ValueError("PASSPHRASE_REQUIRED")
+
+        return value
+
+    def _open(self, passphrase):
+        password = self._password_bytes(passphrase)
 
         if not self.exists():
             raise ValueError("WALLET_NOT_FOUND")
@@ -47,7 +62,7 @@ class WalletService:
 
         ring = Keyring.restore(
             encrypted,
-            passphrase.encode(),
+            password,
         )
 
         wallet = SilentWallet(
@@ -186,7 +201,7 @@ class WalletService:
             )
 
             encrypted = ring.backup(
-                passphrase.encode(),
+                self._password_bytes(passphrase),
             )
 
             temporary_keys.unlink(
@@ -271,7 +286,7 @@ class WalletService:
             envelope = create_recovery(
                 ring,
                 wallet.scanner,
-                passphrase.encode(),
+                self._password_bytes(passphrase),
             )
 
             # save_private uses O_EXCL + 0600 and refuses
@@ -349,7 +364,7 @@ class WalletService:
 
             ring, scanner = restore_recovery(
                 envelope,
-                passphrase.encode(),
+                self._password_bytes(passphrase),
                 restored_db,
             )
 
