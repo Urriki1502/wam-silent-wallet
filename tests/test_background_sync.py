@@ -23,6 +23,7 @@ class FakeNode:
         self.ready = ready
         self.fail = fail
         self.snapshot_calls = 0
+        self.details_calls = 0
         self.chain_calls = 0
 
     def snapshot(self):
@@ -38,6 +39,18 @@ class FakeNode:
             "ibd": not self.ready,
             "ready": self.ready,
             "tip": "a" * 64,
+        }
+
+    def details(self):
+        self.details_calls += 1
+
+        return {
+            **self.snapshot(),
+            "mempool_transactions": 0,
+            "tip_tx_count": 1,
+            "tip_time": 1_700_000_000,
+            "rpc_url": "http://127.0.0.1:18443",
+            "cookie_exists": True,
         }
 
     def scanner_chain(self):
