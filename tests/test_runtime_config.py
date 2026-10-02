@@ -62,7 +62,7 @@ class ConfigServiceTests(
 
     def test_round_trip_and_atomic_save(self):
         saved = self.service.update(
-            rpc_url="http://localhost:19443",
+            rpc_url="http://127.0.0.1:19443",
             sync_interval_seconds=30,
             fee_tier="Priority",
         )
@@ -76,7 +76,7 @@ class ConfigServiceTests(
 
         self.assertEqual(
             loaded.rpc_url,
-            "http://localhost:19443",
+            "http://127.0.0.1:19443",
         )
 
         self.assertEqual(
@@ -151,6 +151,8 @@ class ConfigServiceTests(
         config = self.service.defaults()
 
         for rpc_url in (
+            "http://localhost:18443",
+            "http://[::1]:18443",
             "http://192.168.1.20:18443",
             "http://user:pass@127.0.0.1:18443",
             "https://127.0.0.1:18443",
