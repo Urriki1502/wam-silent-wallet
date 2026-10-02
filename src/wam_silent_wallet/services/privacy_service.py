@@ -342,10 +342,7 @@ class NetworkPrivacyService:
     ) -> NetworkPrivacySnapshot:
         network_info = (
             self.node_service
-            .scanner_chain()
-            .call(
-                "getnetworkinfo"
-            )
+            .network_info()
         )
 
         return self.analyze(
