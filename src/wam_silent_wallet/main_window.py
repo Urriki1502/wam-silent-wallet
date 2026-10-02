@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from .services.node_service import NodeService
 from .services.wallet_service import WalletService
 from .services.session_service import SessionService
+from .services.config_service import ConfigService
 from .services.sync_service import BackgroundSyncService
 from .services.sync_worker import BackgroundSyncThread
 
@@ -47,8 +48,20 @@ class MainWindow(QMainWindow):
             700,
         )
 
+        self.config_service = (
+            ConfigService()
+        )
+
+        self.runtime_config = (
+            self.config_service
+            .load_or_create()
+        )
+
         self.node_service = (
-            NodeService()
+            NodeService
+            .from_runtime_config(
+                self.runtime_config
+            )
         )
 
         self.wallet_service = (
@@ -65,6 +78,10 @@ class MainWindow(QMainWindow):
             BackgroundSyncService(
                 self.wallet_service,
                 self.node_service,
+                success_interval_seconds=(
+                    self.runtime_config
+                    .sync_interval_seconds
+                ),
             )
         )
 
@@ -586,6 +603,10 @@ class MainWindow(QMainWindow):
                 self.wallet_service,
                 self.node_service,
                 self.session_service,
+                default_fee_tier=(
+                    self.runtime_config
+                    .fee_tier
+                ),
             )
         )
 
