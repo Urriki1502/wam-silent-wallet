@@ -261,6 +261,25 @@ class SendPage(QWidget):
 
         self.refresh_fee_quote()
 
+    def set_default_fee_tier(
+        self,
+        tier: str,
+    ):
+        if tier not in {
+            "Economy",
+            "Normal",
+            "Priority",
+        }:
+            raise ValueError(
+                "CONFIG_FEE_TIER"
+            )
+
+        self.default_fee_tier = tier
+
+        self.fee_tier.setCurrentText(
+            tier
+        )
+
     def refresh_fee_quote(self):
         self.refresh_fee_button.setEnabled(
             False
