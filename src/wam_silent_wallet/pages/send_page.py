@@ -18,6 +18,7 @@ class SendPage(QWidget):
         wallet_service,
         node_service,
         session_service,
+        default_fee_tier="Normal",
         parent=None,
     ):
         super().__init__(parent)
@@ -25,6 +26,15 @@ class SendPage(QWidget):
         self.wallet_service = wallet_service
         self.node_service = node_service
         self.session_service = session_service
+        self.default_fee_tier = (
+            default_fee_tier
+            if default_fee_tier in {
+                "Economy",
+                "Normal",
+                "Priority",
+            }
+            else "Normal"
+        )
 
         self.payment_service = (
             PaymentService(
@@ -120,7 +130,7 @@ class SendPage(QWidget):
         )
 
         self.fee_tier.setCurrentText(
-            "Normal"
+            self.default_fee_tier
         )
 
         self.fee_tier.currentTextChanged.connect(
