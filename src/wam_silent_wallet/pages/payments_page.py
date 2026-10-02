@@ -172,84 +172,9 @@ class PaymentsPage(QWidget):
                 )
             )
 
-            payments = result["payments"]
-
-            self.table.setRowCount(
-                len(payments)
-            )
-
-            for row, payment in enumerate(
-                payments
-            ):
-                label_text = (
-                    "Base"
-                    if payment["label"] is None
-                    else f'Label {payment["label"]}'
-                )
-
-                state_text = (
-                    "Available"
-                    if payment["spent"] is None
-                    else f'Spent @ {payment["spent"]}'
-                )
-
-                full_txid = (
-                    payment["txid"]
-                )
-
-                short_txid = (
-                    full_txid[:12]
-                    + "..."
-                    + full_txid[-12:]
-                )
-
-                txid = QTableWidgetItem(
-                    short_txid
-                )
-
-                txid.setData(
-                    Qt.UserRole,
-                    full_txid,
-                )
-
-                values = [
-                    QTableWidgetItem(
-                        f'{payment["amount_wam"]:.8f} WAM'
-                    ),
-                    QTableWidgetItem(
-                        str(payment["received"])
-                    ),
-                    QTableWidgetItem(
-                        str(payment["confirmations"])
-                    ),
-                    QTableWidgetItem(
-                        label_text
-                    ),
-                    QTableWidgetItem(
-                        state_text
-                    ),
-                    txid,
-                    QTableWidgetItem(
-                        str(payment["vout"])
-                    ),
-                ]
-
-                for column, item in enumerate(
-                    values
-                ):
-                    self.table.setItem(
-                        row,
-                        column,
-                        item,
-                    )
-
-            self.status.setText(
-                f'{result["count"]} '
-                "payment(s) detected."
-            )
-
-            self.message.setText(
-                "Payment history synchronized successfully."
+            self.apply_snapshot(
+                result,
+                automatic=False,
             )
 
         except Exception:
@@ -265,6 +190,102 @@ class PaymentsPage(QWidget):
             self.refresh_button.setEnabled(
                 True
             )
+
+    def apply_snapshot(
+        self,
+        result: dict,
+        *,
+        automatic: bool = True,
+    ):
+        payments = result.get(
+            "payments",
+            [],
+        )
+
+        self.table.setRowCount(
+            len(payments)
+        )
+
+        for row, payment in enumerate(
+            payments
+        ):
+            label_text = (
+                "Base"
+                if payment["label"] is None
+                else f'Label {payment["label"]}'
+            )
+
+            state_text = (
+                "Available"
+                if payment["spent"] is None
+                else f'Spent @ {payment["spent"]}'
+            )
+
+            full_txid = payment["txid"]
+
+            short_txid = (
+                full_txid[:12]
+                + "..."
+                + full_txid[-12:]
+            )
+
+            txid = QTableWidgetItem(
+                short_txid
+            )
+
+            txid.setData(
+                Qt.UserRole,
+                full_txid,
+            )
+
+            values = [
+                QTableWidgetItem(
+                    f'{payment["amount_wam"]:.8f} WAM'
+                ),
+                QTableWidgetItem(
+                    str(payment["received"])
+                ),
+                QTableWidgetItem(
+                    str(payment["confirmations"])
+                ),
+                QTableWidgetItem(
+                    label_text
+                ),
+                QTableWidgetItem(
+                    state_text
+                ),
+                txid,
+                QTableWidgetItem(
+                    str(payment["vout"])
+                ),
+            ]
+
+            for column, item in enumerate(
+                values
+            ):
+                self.table.setItem(
+                    row,
+                    column,
+                    item,
+                )
+
+        count = result.get(
+            "count",
+            result.get(
+                "payments_count",
+                len(payments),
+            ),
+        )
+
+        self.status.setText(
+            f"{count} payment(s) detected."
+        )
+
+        self.message.setText(
+            "Payments auto-synchronized."
+            if automatic
+            else "Payment history synchronized successfully."
+        )
 
     def _selection_changed(self):
         self.copy_button.setEnabled(
