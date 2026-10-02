@@ -40,7 +40,7 @@ class RuntimeConfigIntegrationTests(unittest.TestCase):
                 {
                     "version": 1,
                     "network": "regtest",
-                    "rpc_url": "http://localhost:19443",
+                    "rpc_url": "http://127.0.0.1:19443",
                     "cookie_path": str(cookie),
                     "sync_interval_seconds": 30.0,
                     "fee_tier": "Priority",
@@ -51,7 +51,7 @@ class RuntimeConfigIntegrationTests(unittest.TestCase):
 
             self.assertEqual(
                 node.rpc_url,
-                "http://localhost:19443",
+                "http://127.0.0.1:19443",
             )
             self.assertEqual(
                 node.cookie_path,
