@@ -99,6 +99,40 @@ class NodeService:
             "cookie_exists": self.cookie_path.is_file(),
         }
 
+    def network_info(self) -> dict:
+        """
+        Read WAM Core P2P network state.
+
+        WAM SDK 0.1 does not currently expose getnetworkinfo on its public
+        typed client or WSP SDKChain allowlist.  Keep this bridge explicit,
+        read-only and node-local until the SDK grows a typed equivalent.
+        """
+        status = self.snapshot()
+
+        if not status["ready"]:
+            raise ValueError(
+                "NODE_NOT_READY"
+            )
+
+        result = (
+            self.client
+            ._transport
+            .call(
+                "getnetworkinfo",
+                [],
+            )
+        )
+
+        if not isinstance(
+            result,
+            dict,
+        ):
+            raise ValueError(
+                "NETWORK_INFO_FORMAT"
+            )
+
+        return result
+
     def scanner_chain(self):
         self._scanner_chain.attest()
         return self._scanner_chain
