@@ -20,6 +20,7 @@ from .services.config_service import ConfigService
 from .services.sync_service import BackgroundSyncService
 from .services.sync_worker import BackgroundSyncThread
 from .services.recovery_worker import RecoveryRestoreThread
+from .services.runtime_lock import RuntimeDataLock
 
 from .pages.lock_page import LockPage
 from .pages.receive_page import ReceivePage
@@ -51,6 +52,19 @@ class MainWindow(QMainWindow):
             700,
         )
 
+        self.wallet_data_dir = (
+            WalletService.resolve_data_dir()
+        )
+
+        self.runtime_lock = (
+            RuntimeDataLock(
+                self.wallet_data_dir
+            )
+        )
+
+        # Lock the wallet runtime before recovery/open operations.
+        self.runtime_lock.acquire()
+
         self.config_service = (
             ConfigService()
         )
@@ -68,7 +82,9 @@ class MainWindow(QMainWindow):
         )
 
         self.wallet_service = (
-            WalletService()
+            WalletService(
+                self.wallet_data_dir
+            )
         )
 
         self.session_service = (

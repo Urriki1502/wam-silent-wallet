@@ -24,30 +24,39 @@ ATOMS_PER_WAM = 100_000_000
 
 
 class WalletService:
+    @staticmethod
+    def resolve_data_dir(
+        data_dir: Path | None = None,
+    ) -> Path:
+        if data_dir is not None:
+            return Path(
+                data_dir
+            ).expanduser()
+
+        override = os.environ.get(
+            "WAM_SILENT_WALLET_DATA_DIR"
+        )
+
+        if override:
+            return Path(
+                override
+            ).expanduser()
+
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "WAM Silent Wallet Demo"
+        )
+
     def __init__(
         self,
         data_dir: Path | None = None,
     ):
-        if data_dir is None:
-            override = os.environ.get(
-                "WAM_SILENT_WALLET_DATA_DIR"
+        self.data_dir = (
+            self.resolve_data_dir(
+                data_dir
             )
-
-            if override:
-                data_dir = Path(
-                    override
-                ).expanduser()
-
-            else:
-                data_dir = (
-                    Path.home()
-                    / "Library"
-                    / "Application Support"
-                    / "WAM Silent Wallet Demo"
-                )
-
-        self.data_dir = Path(
-            data_dir
         )
 
         self.db_path = (
@@ -69,6 +78,35 @@ class WalletService:
         # Repair or finalize any recovery activation interrupted
         # by process termination, power loss, or OS crash.
         self.recovery.recover_interrupted_activation()
+
+        self._validate_startup_fileset()
+
+    def _validate_startup_fileset(
+        self,
+    ):
+        for path in (
+            self.db_path,
+            self.keys_path,
+        ):
+            if path.is_symlink():
+                raise RuntimeError(
+                    "WALLET_FILESET_SYMLINK"
+                )
+
+        db_exists = (
+            self.db_path.exists()
+        )
+
+        keys_exist = (
+            self.keys_path.exists()
+        )
+
+        # A wallet is either completely absent (first run) or
+        # must have both authenticated key material and database.
+        if db_exists != keys_exist:
+            raise RuntimeError(
+                "WALLET_FILESET_INCOMPLETE"
+            )
 
     def exists(self) -> bool:
         return (
