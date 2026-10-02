@@ -2,8 +2,11 @@
 
 from dataclasses import dataclass
 
+from wam_sp.wallet import Intent
+
 from .fee_service import FeePolicyService
 from .signer_service import SignerService
+from .transaction_manifest import SigningManifest
 
 
 ATOMS_PER_WAM = 100_000_000
@@ -12,6 +15,7 @@ ATOMS_PER_WAM = 100_000_000
 @dataclass(frozen=True)
 class PaymentReview:
     proposal: object
+    manifest: SigningManifest
     destination: str
     amount_atoms: int
     fee_atoms: int
@@ -85,6 +89,83 @@ class PaymentService:
             )
         except Exception:
             pass
+
+    @staticmethod
+    def _assert_review_integrity(
+        review: PaymentReview,
+    ) -> None:
+        if not isinstance(
+            review,
+            PaymentReview,
+        ):
+            raise ValueError(
+                "PAYMENT_REVIEW_REQUIRED"
+            )
+
+        manifest = review.manifest
+
+        if not isinstance(
+            manifest,
+            SigningManifest,
+        ):
+            raise ValueError(
+                "SIGNING_MANIFEST_REQUIRED"
+            )
+
+        manifest.assert_matches(
+            review.proposal
+        )
+
+        # The current desktop send flow is intentionally
+        # single-recipient.  Any future multi-recipient UI
+        # must introduce a new review representation rather
+        # than silently weakening this invariant.
+        if len(manifest.intents) != 1:
+            raise ValueError(
+                "SIGNING_REVIEW_MISMATCH"
+            )
+
+        intent = manifest.intents[0]
+
+        selected_atoms = sum(
+            item.atoms
+            for item in manifest.inputs
+        )
+
+        change_atoms = (
+            selected_atoms
+            - intent.atoms
+            - manifest.fee
+        )
+
+        if change_atoms < 0:
+            raise ValueError(
+                "SIGNING_REVIEW_MISMATCH"
+            )
+
+        output_count = (
+            1
+            if change_atoms == 0
+            else 2
+        )
+
+        if (
+            review.destination
+            != intent.code
+            or review.amount_atoms
+            != intent.atoms
+            or review.fee_atoms
+            != manifest.fee
+            or review.input_count
+            != len(manifest.inputs)
+            or review.change_atoms
+            != change_atoms
+            or review.output_count
+            != output_count
+        ):
+            raise ValueError(
+                "SIGNING_REVIEW_MISMATCH"
+            )
 
     def review(
         self,
@@ -210,6 +291,12 @@ class PaymentService:
                 if next_fee == fee_atoms:
                     return PaymentReview(
                         proposal=proposal,
+                        manifest=(
+                            SigningManifest
+                            .from_proposal(
+                                proposal
+                            )
+                        ),
                         destination=destination,
                         amount_atoms=amount_atoms,
                         fee_atoms=fee_atoms,
@@ -281,18 +368,40 @@ class PaymentService:
         passphrase: str,
         review: PaymentReview,
     ) -> dict:
+        # Validate the user-approved transaction commitment
+        # before private key material is opened.
+        self._assert_review_integrity(
+            review
+        )
+
+        approved_intents = tuple(
+            Intent(
+                item.code,
+                item.atoms,
+            )
+            for item in review.manifest.intents
+        )
+
         ring, wallet = (
             self.wallet_service
             ._open(passphrase)
         )
 
         try:
-            # Scanner readiness belongs to a wallet instance.  Re-scan after
-            # reopening so broadcast never relies on stale in-memory state.
+            # Scanner readiness belongs to a wallet instance.
+            # Re-scan after reopening so broadcast never relies
+            # on stale in-memory state.
             wallet.scan(
                 self.node_service
                 .scanner_chain(),
                 mempool=True,
+            )
+
+            # Re-check immediately before invoking the signer.
+            # A mutable nested proposal dictionary must never
+            # cross the signing boundary unnoticed.
+            self._assert_review_integrity(
+                review
             )
 
             signed_psbt = (
@@ -300,19 +409,38 @@ class PaymentService:
                 .sign(
                     keyring=ring,
                     proposal=review.proposal,
+                    approval_manifest=(
+                        review.manifest
+                    ),
                     approved_intents=(
-                        review.proposal
-                        .intents
+                        approved_intents
                     ),
                     approved_max_fee=(
-                        review.fee_atoms
+                        review.manifest.fee
                     ),
                 )
             )
 
+            # Once signature material exists, the input
+            # reservation is no longer a disposable draft.
+            # Subsequent failures must not automatically make
+            # these coins available for another transaction.
+            wallet.wallet.mark_signed(
+                review.manifest
+                .reservation_token
+            )
+
+            # A signer backend must not mutate the coordinator
+            # proposal while signing.  PSBT byte-level output
+            # verification is handled by the next boundary.
+            self._assert_review_integrity(
+                review
+            )
+
             txid = wallet.broadcast(
                 signed_psbt,
-                review.proposal.token,
+                review.manifest
+                .reservation_token,
                 self.node_service
                 .broadcast_chain(),
             )
@@ -334,9 +462,15 @@ class PaymentService:
                 "change_atoms": review.change_atoms,
                 "tier": review.tier,
                 "fee_source": review.fee_source,
+                "signing_manifest": (
+                    review.manifest.digest
+                ),
             }
 
         except Exception:
+            # This releases only reservations that are still
+            # drafts. mark_signed() deliberately makes this a
+            # no-op after signature material has been created.
             self._release_draft(
                 wallet,
                 review.proposal,

@@ -9,7 +9,6 @@ from typing import TypeAlias
 
 from wam_sp.api import SilentWallet
 from wam_sp.keystore import Keyring, load_private, save_private
-from wam_sp.wallet import Signer
 from wam_sp.backup import (
     create as create_recovery,
     restore as restore_recovery,
@@ -469,120 +468,16 @@ class WalletService:
         fee_atoms: int = 1000,
     ) -> dict:
         """
-        Construct, sign, policy-check and broadcast one WSP payment.
+        Legacy direct-signing entry point.
 
-        No passphrase or private key is returned to the caller.
+        Signing must pass through PaymentService -> SigningManifest
+        -> SignerService.  Keeping this method fail-closed prevents
+        future callers from accidentally bypassing the transaction
+        approval boundary.
         """
-        if not isinstance(destination, str) or not destination.strip():
-            raise ValueError("DESTINATION_REQUIRED")
-
-        destination = destination.strip()
-
-        amount_atoms = self.amount_to_atoms(
-            amount_text
+        raise RuntimeError(
+            "LEGACY_SIGNING_PATH_DISABLED"
         )
-
-        if (
-            type(fee_atoms) is not int
-            or not 1 <= fee_atoms <= 1_000_000
-        ):
-            raise ValueError("FEE_POLICY")
-
-        ring, wallet = self._open(passphrase)
-
-        proposal = None
-
-        try:
-            # Ensure coin selection is based on current chain state.
-            wallet.scan(
-                chain,
-                mempool=True,
-            )
-
-            balance = wallet.get_balance()
-
-            required = amount_atoms + fee_atoms
-
-            if balance["available_atoms"] < required:
-                raise ValueError("INSUFFICIENT_FUNDS")
-
-            # Coordinator selects coins and reserves them.
-            proposal = wallet.construct_payment(
-                [
-                    (
-                        destination,
-                        amount_atoms,
-                    )
-                ],
-                fee_atoms,
-            )
-
-            selected_atoms = sum(
-                coin["atoms"]
-                for coin in proposal.coins
-            )
-
-            # Spend secret stays inside Keyring/Signer.
-            signer = Signer(ring)
-
-            prepared = signer.prepare(
-                proposal
-            )
-
-            signed_psbt = signer.sign(
-                prepared,
-                proposal.intents,
-                fee_atoms,
-            )
-
-            # broadcast() performs:
-            # - UTXO verification
-            # - testmempoolaccept
-            # - sendrawtransaction
-            txid = wallet.broadcast(
-                signed_psbt,
-                proposal.token,
-                chain,
-            )
-
-            change_atoms = (
-                selected_atoms
-                - amount_atoms
-                - fee_atoms
-            )
-
-            return {
-                "txid": txid,
-                "amount_atoms": amount_atoms,
-                "amount_wam": (
-                    amount_atoms / ATOMS_PER_WAM
-                ),
-                "fee_atoms": fee_atoms,
-                "fee_wam": (
-                    fee_atoms / ATOMS_PER_WAM
-                ),
-                "selected_atoms": selected_atoms,
-                "change_atoms": change_atoms,
-                "inputs": len(proposal.coins),
-            }
-
-        except Exception:
-            # If failure happened while the reservation is still a
-            # draft, release it. If signing/broadcast already moved it
-            # to another state, release_draft deliberately refuses.
-            if proposal is not None:
-                try:
-                    wallet.wallet.release_draft(
-                        proposal.token
-                    )
-                except Exception:
-                    pass
-
-            raise
-
-        finally:
-            wallet.close()
-            ring.close()
 
     def scan_snapshot(
         self,
