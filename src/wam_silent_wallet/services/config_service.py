@@ -241,6 +241,18 @@ class ConfigService:
             data
         )
 
+    def load_or_create(self) -> RuntimeConfig:
+        """
+        Load the validated runtime configuration, creating a private default
+        file on first run.  Existing invalid files are never overwritten.
+        """
+        if self.path.exists():
+            return self.load()
+
+        return self.save(
+            self.defaults()
+        )
+
     def save(
         self,
         config: RuntimeConfig | dict,
