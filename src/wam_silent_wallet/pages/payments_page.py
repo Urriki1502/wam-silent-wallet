@@ -162,15 +162,18 @@ class PaymentsPage(QWidget):
         QApplication.processEvents()
 
         try:
-            result = (
-                self.wallet_service
-                .payments_snapshot(
-                    self.session_service
-                    .passphrase(),
-                    self.node_service
-                    .scanner_chain(),
+            with (
+                self.session_service
+                .secret_lease()
+            ) as secret:
+                result = (
+                    self.wallet_service
+                    .payments_snapshot(
+                        secret,
+                        self.node_service
+                        .scanner_chain(),
+                    )
                 )
-            )
 
             self.apply_snapshot(
                 result,
