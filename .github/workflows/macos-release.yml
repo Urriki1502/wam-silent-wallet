@@ -135,6 +135,32 @@ jobs:
               --wsp ../wam-silent-payments \
               --lock supply-chain.lock.json
 
+          cp artifacts.lock.json \
+              "$RUNNER_TEMP/artifacts.lock.expected.json"
+
+          cp requirements-hashed.txt \
+              "$RUNNER_TEMP/requirements-hashed.expected.txt"
+
+          cp sbom.cdx.json \
+              "$RUNNER_TEMP/sbom.expected.json"
+
+          python scripts/artifact_lock.py \
+              build \
+              --root . \
+              --wsp ../wam-silent-payments
+
+          cmp \
+              artifacts.lock.json \
+              "$RUNNER_TEMP/artifacts.lock.expected.json"
+
+          cmp \
+              requirements-hashed.txt \
+              "$RUNNER_TEMP/requirements-hashed.expected.txt"
+
+          cmp \
+              sbom.cdx.json \
+              "$RUNNER_TEMP/sbom.expected.json"
+
           python scripts/artifact_lock.py \
               verify \
               --root .
