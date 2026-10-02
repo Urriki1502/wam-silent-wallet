@@ -26,6 +26,7 @@ from .pages.send_page import SendPage
 from .pages.payments_page import PaymentsPage
 from .pages.node_page import NodePage
 from .pages.backup_page import BackupPage
+from .pages.settings_page import SettingsPage
 
 from .ui_components import (
     BrandMark,
@@ -88,6 +89,8 @@ class MainWindow(QMainWindow):
         self.background_sync_thread = None
         self.payments_page = None
         self.node_page = None
+        self.send_page = None
+        self.settings_page = None
 
         self.root_stack = (
             QStackedWidget()
@@ -165,6 +168,8 @@ class MainWindow(QMainWindow):
         self.wallet_shell = None
         self.payments_page = None
         self.node_page = None
+        self.send_page = None
+        self.settings_page = None
 
     def closeEvent(self, event):
         self._stop_background_sync()
@@ -440,6 +445,21 @@ class MainWindow(QMainWindow):
             + "rollback(s)."
         )
 
+    def _runtime_config_saved(
+        self,
+        config,
+    ):
+        self.runtime_config = config
+
+        self.background_sync_service.success_interval_seconds = (
+            config.sync_interval_seconds
+        )
+
+        if self.send_page is not None:
+            self.send_page.set_default_fee_tier(
+                config.fee_tier
+            )
+
     # ==========================================================
     # Wallet shell
     # ==========================================================
@@ -578,6 +598,7 @@ class MainWindow(QMainWindow):
                 "Payments",
                 "Node",
                 "Backup",
+                "Settings",
             ]
         )
 
@@ -598,16 +619,18 @@ class MainWindow(QMainWindow):
             )
         )
 
+        self.send_page = SendPage(
+            self.wallet_service,
+            self.node_service,
+            self.session_service,
+            default_fee_tier=(
+                self.runtime_config
+                .fee_tier
+            ),
+        )
+
         pages.addWidget(
-            SendPage(
-                self.wallet_service,
-                self.node_service,
-                self.session_service,
-                default_fee_tier=(
-                    self.runtime_config
-                    .fee_tier
-                ),
-            )
+            self.send_page
         )
 
         self.payments_page = PaymentsPage(
@@ -633,6 +656,19 @@ class MainWindow(QMainWindow):
                 self.wallet_service,
                 self.session_service,
             )
+        )
+
+        self.settings_page = SettingsPage(
+            self.config_service,
+            self.runtime_config,
+        )
+
+        self.settings_page.settings_saved.connect(
+            self._runtime_config_saved
+        )
+
+        pages.addWidget(
+            self.settings_page
         )
 
         sidebar.currentRowChanged.connect(
