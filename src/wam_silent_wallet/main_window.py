@@ -108,6 +108,9 @@ class MainWindow(QMainWindow):
         self.recovery_thread = None
         self.recovery_worker = None
 
+        self._shutdown_in_progress = False
+        self._shutdown_complete = False
+
         self.payments_page = None
         self.node_page = None
         self.send_page = None
@@ -201,11 +204,110 @@ class MainWindow(QMainWindow):
         self.backup_page = None
 
     def closeEvent(self, event):
-        self._stop_background_sync()
+        if self._shutdown_complete:
+            super().closeEvent(
+                event
+            )
+            return
+
+        if self._shutdown_in_progress:
+            event.ignore()
+            return
+
+        self._shutdown_in_progress = True
+
+        try:
+            if not self._stop_background_sync(
+                timeout_ms=15_000,
+            ):
+                print(
+                    "Shutdown deferred:",
+                    "BACKGROUND_SYNC_STILL_RUNNING",
+                )
+
+                event.ignore()
+                return
+
+            if not self._wait_for_recovery_shutdown(
+                timeout_ms=30_000,
+            ):
+                print(
+                    "Shutdown deferred:",
+                    "RECOVERY_STILL_RUNNING",
+                )
+
+                event.ignore()
+                return
+
+            self._finalize_shutdown()
+
+        finally:
+            if not self._shutdown_complete:
+                self._shutdown_in_progress = False
+
+        if self._shutdown_complete:
+            super().closeEvent(
+                event
+            )
+
+    def shutdown_for_application_exit(
+        self,
+    ):
+        """
+        Final fallback used by QApplication.aboutToQuit.
+
+        At this point the application cannot safely cancel the quit,
+        so join active workers without a timeout before releasing the
+        wallet runtime lock.
+        """
+        if self._shutdown_complete:
+            return
+
+        self._shutdown_in_progress = True
+
+        self._stop_background_sync(
+            timeout_ms=None,
+        )
+
+        self._wait_for_recovery_shutdown(
+            timeout_ms=None,
+        )
+
+        self._finalize_shutdown()
+
+    def _finalize_shutdown(
+        self,
+    ):
+        if self._shutdown_complete:
+            return
 
         self.session_service.lock()
 
-        super().closeEvent(event)
+        try:
+            result = (
+                self.wallet_service
+                .validate_shutdown_integrity()
+            )
+
+            print(
+                "Shutdown integrity:",
+                result,
+            )
+
+        except Exception as exc:
+            # A shutdown integrity warning must never cause the
+            # application to retain an OS process lock forever.
+            # Startup preflight will fail closed on the next launch.
+            print(
+                "Shutdown integrity warning:",
+                type(exc).__name__,
+                str(exc),
+            )
+
+        finally:
+            self.runtime_lock.release()
+
+        self._shutdown_complete = True
 
     # ==========================================================
     # Recovery lifecycle
@@ -356,18 +458,63 @@ class MainWindow(QMainWindow):
 
         worker.start()
 
-    def _stop_background_sync(self):
+    def _stop_background_sync(
+        self,
+        timeout_ms=None,
+    ):
         worker = self.background_sync_thread
 
         if worker is None:
-            return
+            return True
 
         worker.stop()
 
         # Join before SessionService clears the unlock secret.
-        worker.wait()
+        if timeout_ms is None:
+            worker.wait()
+            stopped = True
+
+        else:
+            stopped = bool(
+                worker.wait(
+                    int(timeout_ms)
+                )
+            )
+
+        if not stopped:
+            return False
 
         self.background_sync_thread = None
+
+        return True
+
+    def _wait_for_recovery_shutdown(
+        self,
+        timeout_ms=None,
+    ):
+        worker = self.recovery_thread
+
+        if worker is None:
+            return True
+
+        if timeout_ms is None:
+            worker.wait()
+            stopped = True
+
+        else:
+            stopped = bool(
+                worker.wait(
+                    int(timeout_ms)
+                )
+            )
+
+        if not stopped:
+            return False
+
+        self.recovery_thread = None
+        self.recovery_worker = None
+
+        return True
 
     def _background_sync_outcome(
         self,

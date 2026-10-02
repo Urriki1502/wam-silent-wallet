@@ -706,6 +706,46 @@ class WalletService:
             wallet.close()
             ring.close()
 
+    def validate_shutdown_integrity(
+        self,
+    ) -> dict:
+        """
+        Validate the persistent wallet fileset after all active
+        workers have been joined and before the process lock is
+        released.
+
+        The WSP store uses SQLite journal_mode=DELETE with
+        synchronous=FULL, so shutdown validation is based on
+        filesystem preflight + SQLite quick_check rather than a
+        WAL checkpoint.
+        """
+        self._validate_startup_fileset()
+
+        if not self.db_path.exists():
+            return {
+                "wallet_exists": False,
+                "database": "absent",
+                "keys": "absent",
+                "unresolved_payments": 0,
+            }
+
+        self._validate_database_preflight()
+        self._validate_keys_preflight()
+
+        unresolved = (
+            self.payment_journal
+            .unresolved()
+        )
+
+        return {
+            "wallet_exists": True,
+            "database": "ok",
+            "keys": "ok",
+            "unresolved_payments": len(
+                unresolved
+            ),
+        }
+
     @staticmethod
     def amount_to_atoms(amount_text: str) -> int:
         """
