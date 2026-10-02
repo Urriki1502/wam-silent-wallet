@@ -216,10 +216,10 @@ if [[ "$NOTARIZED" == "1" ]]; then
     MANIFEST_ARGS+=(--notarized)
 fi
 
-"$PY" scripts/release_manifest.py \
+"$PY" -m scripts.release_manifest \
     "${MANIFEST_ARGS[@]}"
 
-"$PY" scripts/release_manifest.py \
+"$PY" -m scripts.release_manifest \
     verify \
     --root "$ROOT" \
     --manifest "$MANIFEST"
