@@ -419,3 +419,74 @@ class BackgroundSyncServiceTests(
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BackgroundSyncFingerprintTests(
+    unittest.TestCase
+):
+    def test_scanner_fingerprint_change_marks_cycle_changed(self):
+        clock = FakeClock()
+        node = FakeNode()
+
+        class FingerprintWallet(
+            FakeWallet
+        ):
+            def __init__(self):
+                super().__init__()
+                self.fingerprint = (
+                    "a" * 64
+                )
+
+            def background_sync_snapshot(
+                self,
+                passphrase,
+                chain,
+            ):
+                result = super().background_sync_snapshot(
+                    passphrase,
+                    chain,
+                )
+
+                result[
+                    "snapshot_fingerprint"
+                ] = self.fingerprint
+
+                return result
+
+        wallet = FingerprintWallet()
+
+        service = BackgroundSyncService(
+            wallet,
+            node,
+            clock=clock,
+        )
+
+        first = service.cycle(
+            "pw"
+        )
+
+        second = service.cycle(
+            "pw"
+        )
+
+        self.assertTrue(
+            first.changed
+        )
+
+        self.assertFalse(
+            second.changed
+        )
+
+        # Same balance/counts, different underlying mempool
+        # identity/replacement.
+        wallet.fingerprint = (
+            "b" * 64
+        )
+
+        third = service.cycle(
+            "pw"
+        )
+
+        self.assertTrue(
+            third.changed
+        )

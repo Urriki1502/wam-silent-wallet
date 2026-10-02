@@ -249,6 +249,9 @@ class BackgroundSyncService:
                 wallet.get("pending_spent_atoms"),
                 wallet.get("payments_count"),
                 wallet.get("history_count"),
+                wallet.get(
+                    "snapshot_fingerprint"
+                ),
             )
 
             changed = marker != self._last_marker

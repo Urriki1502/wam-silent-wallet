@@ -212,11 +212,16 @@ class PaymentsPage(QWidget):
         for row, payment in enumerate(
             payments
         ):
-            label_text = (
-                "Base"
-                if payment["label"] is None
-                else f'Label {payment["label"]}'
+            label_text = payment.get(
+                "label_name"
             )
+
+            if not label_text:
+                label_text = (
+                    "Base"
+                    if payment["label"] is None
+                    else f'Label {payment["label"]}'
+                )
 
             state_text = (
                 "Available"

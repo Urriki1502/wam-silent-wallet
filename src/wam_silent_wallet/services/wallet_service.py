@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TypeAlias
 
 from .recovery_service import RecoveryService
+from .scanner_snapshot import build_scanner_snapshot
 
 from wam_sp.api import SilentWallet
 from wam_sp.keystore import Keyring, load_private, save_private
@@ -569,111 +570,11 @@ class WalletService:
             "LEGACY_SIGNING_PATH_DISABLED"
         )
 
-    def scan_snapshot(
+    def _verified_scanner_snapshot(
         self,
         passphrase: SecretMaterial,
         chain,
     ) -> dict:
-        ring, wallet = self._open(passphrase)
-
-        try:
-            metrics = wallet.scan(
-                chain,
-                mempool=True,
-            )
-
-            balance = wallet.get_balance()
-            payments = [
-                item
-                for item in wallet.list_payments()
-                if item["label"] != 0
-            ]
-            history = wallet.history()
-
-            return {
-                "scan_blocks": metrics.blocks,
-                "scan_transactions": metrics.transactions,
-                "scan_candidates": metrics.candidates,
-                "scan_rollback": metrics.rollback,
-                "confirmed_atoms": balance["confirmed_atoms"],
-                "available_atoms": balance["available_atoms"],
-                "unconfirmed_atoms": balance["unconfirmed_atoms"],
-                "pending_spent_atoms": balance["pending_spent_atoms"],
-                "payments": len(payments),
-                "history": len(history),
-            }
-
-        finally:
-            wallet.close()
-            ring.close()
-
-    def payments_snapshot(
-        self,
-        passphrase: SecretMaterial,
-        chain,
-    ) -> dict:
-        ring, wallet = self._open(passphrase)
-
-        try:
-            metrics = wallet.scan(
-                chain,
-                mempool=True,
-            )
-
-            raw_payments = [
-                item
-                for item in wallet.list_payments(
-                    limit=1000,
-                    offset=0,
-                )
-                if item["label"] != 0
-            ]
-
-            payments = []
-
-            for item in reversed(raw_payments):
-                atoms = item["atoms"]
-
-                payments.append(
-                    {
-                        "txid": item["txid"],
-                        "vout": item["vout"],
-                        "atoms": atoms,
-                        "amount_wam": (
-                            atoms / ATOMS_PER_WAM
-                        ),
-                        "label": item["label"],
-                        "epoch": item["epoch"],
-                        "received": item["received"],
-                        "spent": item["spent"],
-                        "confirmations": item["confirmations"],
-                    }
-                )
-
-            return {
-                "scan_blocks": metrics.blocks,
-                "scan_transactions": metrics.transactions,
-                "scan_rollback": metrics.rollback,
-                "count": len(payments),
-                "payments": payments,
-            }
-
-        finally:
-            wallet.close()
-            ring.close()
-
-    def background_sync_snapshot(
-        self,
-        passphrase: SecretMaterial,
-        chain,
-    ) -> dict:
-        """
-        Perform one scanner pass and return the complete read-only snapshot
-        needed by the background synchronization layer.
-
-        One wallet instance owns the scanner/database connection for the whole
-        cycle so Dashboard and Payments data come from the same verified tip.
-        """
         ring, wallet = self._open(
             passphrase
         )
@@ -684,60 +585,151 @@ class WalletService:
                 mempool=True,
             )
 
-            balance = wallet.get_balance()
-
-            raw_payments = [
-                item
-                for item in wallet.list_payments(
-                    limit=1000,
-                    offset=0,
-                )
-                if item["label"] != 0
-            ]
-
-            payments = []
-
-            for item in reversed(
-                raw_payments
-            ):
-                atoms = item["atoms"]
-
-                payments.append(
-                    {
-                        "txid": item["txid"],
-                        "vout": item["vout"],
-                        "atoms": atoms,
-                        "amount_wam": (
-                            atoms
-                            / ATOMS_PER_WAM
-                        ),
-                        "label": item["label"],
-                        "epoch": item["epoch"],
-                        "received": item["received"],
-                        "spent": item["spent"],
-                        "confirmations": item["confirmations"],
-                    }
-                )
-
-            history = wallet.history(
-                limit=1000,
-                offset=0,
+            return build_scanner_snapshot(
+                wallet,
+                metrics,
             )
-
-            return {
-                "scan_blocks": metrics.blocks,
-                "scan_transactions": metrics.transactions,
-                "scan_candidates": metrics.candidates,
-                "scan_rollback": metrics.rollback,
-                "confirmed_atoms": balance["confirmed_atoms"],
-                "available_atoms": balance["available_atoms"],
-                "unconfirmed_atoms": balance["unconfirmed_atoms"],
-                "pending_spent_atoms": balance["pending_spent_atoms"],
-                "payments_count": len(payments),
-                "history_count": len(history),
-                "payments": payments,
-            }
 
         finally:
             wallet.close()
             ring.close()
+
+    def scan_snapshot(
+        self,
+        passphrase: SecretMaterial,
+        chain,
+    ) -> dict:
+        snapshot = (
+            self._verified_scanner_snapshot(
+                passphrase,
+                chain,
+            )
+        )
+
+        return {
+            "scan_blocks": (
+                snapshot["scan_blocks"]
+            ),
+            "scan_transactions": (
+                snapshot[
+                    "scan_transactions"
+                ]
+            ),
+            "scan_candidates": (
+                snapshot[
+                    "scan_candidates"
+                ]
+            ),
+            "scan_rollback": (
+                snapshot[
+                    "scan_rollback"
+                ]
+            ),
+            "confirmed_atoms": (
+                snapshot[
+                    "confirmed_atoms"
+                ]
+            ),
+            "available_atoms": (
+                snapshot[
+                    "available_atoms"
+                ]
+            ),
+            "unconfirmed_atoms": (
+                snapshot[
+                    "unconfirmed_atoms"
+                ]
+            ),
+            "pending_spent_atoms": (
+                snapshot[
+                    "pending_spent_atoms"
+                ]
+            ),
+            "payments": (
+                snapshot[
+                    "payments_count"
+                ]
+            ),
+            "history": (
+                snapshot[
+                    "history_count"
+                ]
+            ),
+            "snapshot_fingerprint": (
+                snapshot[
+                    "snapshot_fingerprint"
+                ]
+            ),
+        }
+
+    def payments_snapshot(
+        self,
+        passphrase: SecretMaterial,
+        chain,
+    ) -> dict:
+        snapshot = (
+            self._verified_scanner_snapshot(
+                passphrase,
+                chain,
+            )
+        )
+
+        return {
+            "scan_blocks": (
+                snapshot["scan_blocks"]
+            ),
+            "scan_transactions": (
+                snapshot[
+                    "scan_transactions"
+                ]
+            ),
+            "scan_candidates": (
+                snapshot[
+                    "scan_candidates"
+                ]
+            ),
+            "scan_rollback": (
+                snapshot[
+                    "scan_rollback"
+                ]
+            ),
+            "count": (
+                snapshot[
+                    "payments_count"
+                ]
+            ),
+            "payments": (
+                snapshot[
+                    "payments"
+                ]
+            ),
+            "scanner_tip_height": (
+                snapshot[
+                    "scanner_tip_height"
+                ]
+            ),
+            "scanner_tip_hash": (
+                snapshot[
+                    "scanner_tip_hash"
+                ]
+            ),
+            "snapshot_fingerprint": (
+                snapshot[
+                    "snapshot_fingerprint"
+                ]
+            ),
+        }
+
+    def background_sync_snapshot(
+        self,
+        passphrase: SecretMaterial,
+        chain,
+    ) -> dict:
+        """
+        Perform one complete chain+mempool scan and expose only a
+        verified, normalized application snapshot.
+        """
+        return self._verified_scanner_snapshot(
+            passphrase,
+            chain,
+        )
