@@ -156,7 +156,7 @@ class BackgroundSyncService:
             try:
                 node = (
                     self.node_service
-                    .snapshot()
+                    .details()
                 )
             except Exception as exc:
                 self._consecutive_failures += 1
