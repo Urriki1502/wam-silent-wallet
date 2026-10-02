@@ -7,6 +7,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import TypeAlias
 
+from .recovery_service import RecoveryService
+
 from wam_sp.api import SilentWallet
 from wam_sp.keystore import Keyring, load_private, save_private
 from wam_sp.backup import (
@@ -21,16 +23,51 @@ ATOMS_PER_WAM = 100_000_000
 
 
 class WalletService:
-    def __init__(self):
-        self.data_dir = (
-            Path.home()
-            / "Library"
-            / "Application Support"
-            / "WAM Silent Wallet Demo"
+    def __init__(
+        self,
+        data_dir: Path | None = None,
+    ):
+        if data_dir is None:
+            override = os.environ.get(
+                "WAM_SILENT_WALLET_DATA_DIR"
+            )
+
+            if override:
+                data_dir = Path(
+                    override
+                ).expanduser()
+
+            else:
+                data_dir = (
+                    Path.home()
+                    / "Library"
+                    / "Application Support"
+                    / "WAM Silent Wallet Demo"
+                )
+
+        self.data_dir = Path(
+            data_dir
         )
 
-        self.db_path = self.data_dir / "wallet.db"
-        self.keys_path = self.data_dir / "keys.wsp"
+        self.db_path = (
+            self.data_dir
+            / "wallet.db"
+        )
+
+        self.keys_path = (
+            self.data_dir
+            / "keys.wsp"
+        )
+
+        self.recovery = RecoveryService(
+            self.data_dir,
+            self.db_path,
+            self.keys_path,
+        )
+
+        # Repair or finalize any recovery activation interrupted
+        # by process termination, power loss, or OS crash.
+        self.recovery.recover_interrupted_activation()
 
     def exists(self) -> bool:
         return (
@@ -419,6 +456,59 @@ class WalletService:
             shutil.rmtree(
                 temp_root,
                 ignore_errors=True,
+            )
+
+    def restore_recovery_bundle(
+        self,
+        passphrase: SecretMaterial,
+        backup_path: str,
+    ) -> dict:
+        """Restore into staging, validate, then activate with rollback."""
+        return self.recovery.restore(
+            passphrase,
+            backup_path,
+        )
+
+    def reconcile_recovery(
+        self,
+        passphrase: SecretMaterial,
+        chain,
+    ) -> dict:
+        if not self.recovery.pending():
+            raise ValueError(
+                "RECOVERY_NOT_PENDING"
+            )
+
+        ring, wallet = self._open(
+            passphrase
+        )
+
+        try:
+            return self.recovery.reconcile(
+                wallet,
+                chain,
+            )
+
+        finally:
+            wallet.close()
+            ring.close()
+
+    def recovery_pending(
+        self,
+    ) -> bool:
+        return self.recovery.pending()
+
+    def recovery_pending_info(
+        self,
+    ):
+        return self.recovery.pending_info()
+
+    def assert_spend_ready(
+        self,
+    ):
+        if self.recovery.pending():
+            raise ValueError(
+                "RECOVERY_RESCAN_REQUIRED"
             )
 
     @staticmethod

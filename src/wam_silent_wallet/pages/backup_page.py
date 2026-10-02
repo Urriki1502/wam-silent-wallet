@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from PySide6.QtCore import Signal
+
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -12,6 +14,8 @@ from PySide6.QtWidgets import (
 
 
 class BackupPage(QWidget):
+    reconcile_requested = Signal()
+
     def __init__(
         self,
         wallet_service,
@@ -26,6 +30,7 @@ class BackupPage(QWidget):
         self.last_backup_path = None
 
         self._build()
+        self.refresh_recovery_state()
 
     def _build(self):
         layout = QVBoxLayout(self)
@@ -136,6 +141,47 @@ class BackupPage(QWidget):
 
         layout.addWidget(
             self.verify_button
+        )
+
+        # ------------------------------------------------------
+        # Reconciliation after active restore
+        # ------------------------------------------------------
+
+        recovery_heading = QLabel(
+            "Recovered wallet state"
+        )
+
+        recovery_heading.setStyleSheet(
+            "font-weight: 700; "
+            "padding-top: 18px;"
+        )
+
+        layout.addWidget(
+            recovery_heading
+        )
+
+        self.recovery_status = QLabel(
+            "Checking recovery state..."
+        )
+
+        self.recovery_status.setWordWrap(
+            True
+        )
+
+        layout.addWidget(
+            self.recovery_status
+        )
+
+        self.reconcile_button = QPushButton(
+            "Reconcile Recovered Wallet with WAM Node"
+        )
+
+        self.reconcile_button.clicked.connect(
+            self.request_reconcile
+        )
+
+        layout.addWidget(
+            self.reconcile_button
         )
 
         # ------------------------------------------------------
@@ -339,4 +385,107 @@ class BackupPage(QWidget):
 
         self.status.setText(
             "Backup path copied."
+        )
+
+    def refresh_recovery_state(self):
+        try:
+            info = (
+                self.wallet_service
+                .recovery_pending_info()
+            )
+
+        except Exception:
+            self.recovery_status.setText(
+                "Recovery state is invalid. "
+                "Spending remains blocked."
+            )
+
+            self.reconcile_button.setEnabled(
+                False
+            )
+
+            return
+
+        if info is None:
+            self.recovery_status.setText(
+                "No recovery reconciliation pending."
+            )
+
+            self.reconcile_button.setEnabled(
+                False
+            )
+
+            return
+
+        address = info["base_address"]
+
+        short = (
+            address[:22]
+            + "..."
+            + address[-16:]
+        )
+
+        self.recovery_status.setText(
+            "RECOVERY PENDING — spending is blocked "
+            "until the restored wallet is reconciled "
+            "with the validating WAM node.\n"
+            f"Wallet: {short}\n"
+            f'SHA256: {info["sha256"]}'
+        )
+
+        self.reconcile_button.setEnabled(
+            True
+        )
+
+    def request_reconcile(self):
+        if not (
+            self.wallet_service
+            .recovery_pending()
+        ):
+            self.refresh_recovery_state()
+            return
+
+        self.reconcile_button.setEnabled(
+            False
+        )
+
+        self.recovery_status.setText(
+            "Reconciling recovered wallet with "
+            "confirmed chain and mempool..."
+        )
+
+        self.reconcile_requested.emit()
+
+    def show_reconcile_success(
+        self,
+        result: dict,
+    ):
+        self.recovery_status.setText(
+            "Recovery reconciliation: PASS\n"
+            f'Blocks scanned: {result["scan_blocks"]}\n'
+            f'Transactions scanned: '
+            f'{result["scan_transactions"]}\n'
+            f'Confirmed locks resolved: '
+            f'{result["resolved_confirmed"]}\n'
+            f'Uncertain locks retained: '
+            f'{result["uncertain_locked"]}\n'
+            f'Manual locks retained: '
+            f'{result["manual_locked"]}\n'
+            "Spending gate cleared."
+        )
+
+        self.reconcile_button.setEnabled(
+            False
+        )
+
+    def show_reconcile_failure(
+        self,
+    ):
+        self.recovery_status.setText(
+            "Recovery reconciliation failed. "
+            "Spending remains blocked."
+        )
+
+        self.reconcile_button.setEnabled(
+            True
         )

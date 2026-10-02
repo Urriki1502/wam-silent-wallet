@@ -174,6 +174,8 @@ class PaymentService:
         amount_text: str,
         tier: str,
     ) -> PaymentReview:
+        self.wallet_service.assert_spend_ready()
+
         if (
             not isinstance(destination, str)
             or not destination.strip()
@@ -368,6 +370,8 @@ class PaymentService:
         passphrase: str,
         review: PaymentReview,
     ) -> dict:
+        self.wallet_service.assert_spend_ready()
+
         # Validate the user-approved transaction commitment
         # before private key material is opened.
         self._assert_review_integrity(

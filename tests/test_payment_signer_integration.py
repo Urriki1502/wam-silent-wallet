@@ -106,6 +106,11 @@ class FakeWalletService:
         self.wallet = wallet
         self.open_calls = []
 
+    def assert_spend_ready(
+        self,
+    ):
+        return None
+
     def _open(
         self,
         passphrase,

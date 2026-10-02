@@ -19,6 +19,7 @@ from .services.session_service import SessionService
 from .services.config_service import ConfigService
 from .services.sync_service import BackgroundSyncService
 from .services.sync_worker import BackgroundSyncThread
+from .services.recovery_worker import RecoveryRestoreThread
 
 from .pages.lock_page import LockPage
 from .pages.receive_page import ReceivePage
@@ -88,11 +89,15 @@ class MainWindow(QMainWindow):
         )
 
         self.background_sync_thread = None
+        self.recovery_thread = None
+        self.recovery_worker = None
+
         self.payments_page = None
         self.node_page = None
         self.send_page = None
         self.settings_page = None
         self.privacy_page = None
+        self.backup_page = None
 
         self.root_stack = (
             QStackedWidget()
@@ -104,6 +109,10 @@ class MainWindow(QMainWindow):
 
         self.lock_page.unlocked.connect(
             self._session_unlocked
+        )
+
+        self.lock_page.restore_requested.connect(
+            self._restore_from_lock_page
         )
 
         self.root_stack.addWidget(
@@ -173,6 +182,7 @@ class MainWindow(QMainWindow):
         self.send_page = None
         self.settings_page = None
         self.privacy_page = None
+        self.backup_page = None
 
     def closeEvent(self, event):
         self._stop_background_sync()
@@ -180,6 +190,123 @@ class MainWindow(QMainWindow):
         self.session_service.lock()
 
         super().closeEvent(event)
+
+    # ==========================================================
+    # Recovery lifecycle
+    # ==========================================================
+
+    def _restore_from_lock_page(
+        self,
+        backup_path,
+        secret,
+    ):
+        if self.session_service.unlocked:
+            self.lock_page.show_restore_failure()
+            return
+
+        if self.recovery_thread is not None:
+            return
+
+        worker = RecoveryRestoreThread(
+            self.wallet_service,
+            backup_path,
+            secret,
+            self,
+        )
+
+        worker.finished.connect(
+            self._recovery_restore_finished
+        )
+
+        self.recovery_thread = worker
+        self.recovery_worker = worker
+
+        worker.start()
+
+    def _recovery_restore_finished(
+        self,
+    ):
+        worker = self.recovery_thread
+
+        if worker is None:
+            return
+
+        try:
+            if worker.error_type is not None:
+                self.lock_page.show_restore_failure()
+
+                print(
+                    "Recovery activation failure:",
+                    worker.error_type,
+                    worker.error_code,
+                )
+
+            elif worker.result is not None:
+                self.lock_page.show_restore_success(
+                    worker.result
+                )
+
+            else:
+                self.lock_page.show_restore_failure()
+
+                print(
+                    "Recovery activation failure:",
+                    "RuntimeError",
+                    "RECOVERY_THREAD_NO_RESULT",
+                )
+
+        finally:
+            worker.deleteLater()
+
+            self.recovery_thread = None
+            self.recovery_worker = None
+
+    def _reconcile_recovered_wallet(
+        self,
+    ):
+        if (
+            not self.session_service.unlocked
+            or self.backup_page is None
+        ):
+            return
+
+        self._stop_background_sync()
+
+        try:
+            with (
+                self.session_service
+                .secret_lease()
+            ) as secret:
+                result = (
+                    self.wallet_service
+                    .reconcile_recovery(
+                        secret,
+                        self.node_service
+                        .scanner_chain(),
+                    )
+                )
+
+            self.backup_page.show_reconcile_success(
+                result
+            )
+
+        except Exception as exc:
+            if self.backup_page is not None:
+                self.backup_page.show_reconcile_failure()
+
+            print(
+                "Recovery reconciliation failure:",
+                type(exc).__name__,
+                str(exc),
+            )
+
+        finally:
+            if (
+                self.wallet_shell is not None
+                and self.session_service.unlocked
+            ):
+                self._start_background_sync()
+
 
     # ==========================================================
     # Background synchronization
@@ -663,11 +790,17 @@ class MainWindow(QMainWindow):
             self.privacy_page
         )
 
+        self.backup_page = BackupPage(
+            self.wallet_service,
+            self.session_service,
+        )
+
+        self.backup_page.reconcile_requested.connect(
+            self._reconcile_recovered_wallet
+        )
+
         pages.addWidget(
-            BackupPage(
-                self.wallet_service,
-                self.session_service,
-            )
+            self.backup_page
         )
 
         self.settings_page = SettingsPage(

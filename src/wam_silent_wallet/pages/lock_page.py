@@ -1,8 +1,14 @@
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import (
+    Qt,
+    Signal,
+)
 
 from PySide6.QtWidgets import (
+    QFileDialog,
+    QInputDialog,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -11,6 +17,12 @@ from PySide6.QtWidgets import (
 
 class LockPage(QWidget):
     unlocked = Signal()
+
+    # path, mutable recovery-passphrase lease
+    restore_requested = Signal(
+        str,
+        object,
+    )
 
     def __init__(
         self,
@@ -116,6 +128,23 @@ class LockPage(QWidget):
             alignment=Qt.AlignCenter,
         )
 
+        self.restore_button = QPushButton(
+            "Restore from Recovery Bundle"
+        )
+
+        self.restore_button.setMaximumWidth(
+            480
+        )
+
+        self.restore_button.clicked.connect(
+            self.restore_wallet
+        )
+
+        outer.addWidget(
+            self.restore_button,
+            alignment=Qt.AlignCenter,
+        )
+
         self.message = QLabel("")
 
         self.message.setAlignment(
@@ -124,7 +153,9 @@ class LockPage(QWidget):
 
         self.message.setWordWrap(True)
 
-        outer.addWidget(self.message)
+        outer.addWidget(
+            self.message
+        )
 
         warning = QLabel(
             "REGTEST wallet — do not use this "
@@ -147,7 +178,9 @@ class LockPage(QWidget):
         outer.addStretch()
 
     def unlock_wallet(self):
-        password = self.passphrase.text()
+        password = (
+            self.passphrase.text()
+        )
 
         if not password:
             self.message.setText(
@@ -182,6 +215,161 @@ class LockPage(QWidget):
             self.unlock_button.setEnabled(
                 True
             )
+
+    def restore_wallet(self):
+        wallet_service = (
+            self.session_service
+            .wallet_service
+        )
+
+        initial_dir = (
+            wallet_service.data_dir
+            / "Backups"
+        )
+
+        filename, _ = (
+            QFileDialog
+            .getOpenFileName(
+                self,
+                "Select WSP Recovery Bundle",
+                str(initial_dir),
+                (
+                    "WSP Recovery Bundle (*.wspbak);;"
+                    "All Files (*)"
+                ),
+            )
+        )
+
+        if not filename:
+            return
+
+        if wallet_service.exists():
+            text = (
+                "This will replace the active wallet database "
+                "and encrypted key file after the recovery bundle "
+                "has been fully authenticated and staged.\n\n"
+                "Continue?"
+            )
+
+        else:
+            text = (
+                "Restore this WSP recovery bundle "
+                "as the active wallet?"
+            )
+
+        answer = QMessageBox.warning(
+            self,
+            "Restore Wallet",
+            text,
+            (
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No
+            ),
+            QMessageBox.StandardButton.No,
+        )
+
+        if (
+            answer
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+
+        password, accepted = (
+            QInputDialog.getText(
+                self,
+                "Recovery Passphrase",
+                (
+                    "Enter the passphrase used "
+                    "to create this recovery bundle:"
+                ),
+                QLineEdit.Password,
+            )
+        )
+
+        if not accepted:
+            return
+
+        if not password:
+            self.message.setText(
+                "Recovery passphrase is required."
+            )
+            return
+
+        secret = bytearray(
+            password.encode(
+                "utf-8"
+            )
+        )
+
+        del password
+
+        self.restore_button.setEnabled(
+            False
+        )
+
+        self.unlock_button.setEnabled(
+            False
+        )
+
+        self.message.setText(
+            "Authenticating and staging recovery..."
+        )
+
+        try:
+            self.restore_requested.emit(
+                filename,
+                secret,
+            )
+
+        finally:
+            for index in range(
+                len(secret)
+            ):
+                secret[index] = 0
+
+    def _restore_controls_ready(
+        self,
+    ):
+        self.restore_button.setEnabled(
+            True
+        )
+
+        self.unlock_button.setEnabled(
+            True
+        )
+
+    def show_restore_success(
+        self,
+        result: dict,
+    ):
+        self._restore_controls_ready()
+        address = (
+            result["base_address"]
+        )
+
+        short = (
+            address[:22]
+            + "..."
+            + address[-16:]
+        )
+
+        self.message.setText(
+            "Recovery activated successfully.\n"
+            "Spending is locked until chain reconciliation.\n"
+            f"Wallet: {short}\n"
+            "Unlock with the recovery passphrase, then open "
+            "Backup → Reconcile recovered wallet."
+        )
+
+    def show_restore_failure(
+        self,
+    ):
+        self._restore_controls_ready()
+
+        self.message.setText(
+            "Recovery failed safely. "
+            "The active wallet was not replaced."
+        )
 
     def reset(self):
         self.passphrase.clear()
