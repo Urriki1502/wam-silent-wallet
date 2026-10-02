@@ -40,10 +40,31 @@ class BackgroundSyncService:
         wallet_service,
         node_service,
         *,
+        success_interval_seconds: float = 15.0,
         clock=time.monotonic,
     ):
+        if (
+            isinstance(
+                success_interval_seconds,
+                bool,
+            )
+            or not isinstance(
+                success_interval_seconds,
+                (int, float),
+            )
+            or not 2.0
+            <= float(success_interval_seconds)
+            <= 300.0
+        ):
+            raise ValueError(
+                "CONFIG_SYNC_INTERVAL"
+            )
+
         self.wallet_service = wallet_service
         self.node_service = node_service
+        self.success_interval_seconds = float(
+            success_interval_seconds
+        )
         self._clock = clock
 
         self._cycle_lock = threading.Lock()
@@ -237,7 +258,7 @@ class BackgroundSyncService:
                 wallet=wallet,
                 error_code=None,
                 next_delay_seconds=(
-                    self.SUCCESS_INTERVAL_SECONDS
+                    self.success_interval_seconds
                 ),
                 changed=changed,
             )
