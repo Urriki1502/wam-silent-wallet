@@ -29,9 +29,15 @@ PIN_RE = re.compile(
 )
 
 METADATA_FILES = (
+    # Immutable metadata carried by the wheel.
+    #
+    # RECORD is intentionally excluded. pip may rewrite RECORD during
+    # installation (generated scripts, installation-specific entries),
+    # so hashing it makes an otherwise identical wheel environment-
+    # dependent. Exact artifact bytes are enforced separately by
+    # artifacts.lock.json.
     "METADATA",
     "WHEEL",
-    "RECORD",
     "entry_points.txt",
     "top_level.txt",
 )
