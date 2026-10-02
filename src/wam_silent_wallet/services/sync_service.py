@@ -144,7 +144,7 @@ class BackgroundSyncService:
 
     def cycle(
         self,
-        passphrase: str,
+        passphrase,
     ) -> SyncOutcome:
         """
         Execute one background sync cycle.
@@ -155,7 +155,15 @@ class BackgroundSyncService:
         """
         started = self._clock()
 
-        if not isinstance(passphrase, str) or not passphrase:
+        valid_secret = (
+            isinstance(
+                passphrase,
+                (str, bytes, bytearray, memoryview),
+            )
+            and len(passphrase) > 0
+        )
+
+        if not valid_secret:
             return self._finish(
                 started=started,
                 status="locked",
