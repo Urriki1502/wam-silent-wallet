@@ -104,12 +104,32 @@ jobs:
               --require-hashes \
               -r requirements-hashed.txt
 
+          SDK_ROOT="../wam-silent-payments/integration-deps/wam-sdk"
+
+          test -f "$SDK_ROOT/pyproject.toml"
+
+          PIP_NO_INDEX=1 \
+          python -m pip install \
+              --disable-pip-version-check \
+              --no-deps \
+              --no-build-isolation \
+              "$SDK_ROOT"
+
           PIP_NO_INDEX=1 \
           python -m pip install \
               --disable-pip-version-check \
               --no-deps \
               --no-build-isolation \
               ../wam-silent-payments
+
+          python - <<'PYTHON'
+          import wam_sdk
+          import wam_sp
+
+          print("WAM SDK :", wam_sdk.__file__)
+          print("WSP     :", wam_sp.__file__)
+          print("SDK + WSP IMPORT: PASS")
+          PYTHON
 
       - name: Verify supply-chain lock
         run: |
