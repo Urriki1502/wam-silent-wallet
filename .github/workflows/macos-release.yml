@@ -1,0 +1,313 @@
+name: macOS Release Signing & Notarization
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Developer ID / notarization / Gatekeeper
+    runs-on: macos-14
+    timeout-minutes: 90
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: wam-silent-wallet
+
+    env:
+      MACOS_BUNDLE_ID: org.wamcoin.silentwallet
+
+    steps:
+      - name: Checkout wallet
+        uses: actions/checkout@v4
+        with:
+          path: wam-silent-wallet
+
+      - name: Read locked build identity
+        id: lock
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          data = json.load(
+              open(
+                  "supply-chain.lock.json",
+                  encoding="utf-8",
+              )
+          )
+
+          values = {
+              "wsp_commit": data[
+                  "wam_silent_payments"
+              ][
+                  "commit"
+              ],
+              "python_version": data[
+                  "python"
+              ][
+                  "major_minor"
+              ],
+              "machine": data[
+                  "platform"
+              ][
+                  "machine"
+              ],
+          }
+
+          with open(
+              os.environ["GITHUB_OUTPUT"],
+              "a",
+              encoding="utf-8",
+          ) as handle:
+              for key, value in values.items():
+                  handle.write(
+                      f"{key}={value}\n"
+                  )
+          PY
+
+      - name: Checkout pinned WSP source
+        uses: actions/checkout@v4
+        with:
+          repository: Urriki1502/wam-silent-payments
+          ref: ${{ steps.lock.outputs.wsp_commit }}
+          path: wam-silent-payments
+
+      - name: Set up locked Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.lock.outputs.python_version }}
+          architecture: ${{ steps.lock.outputs.machine }}
+
+      - name: Validate release credentials
+        env:
+          CERT_B64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          API_KEY_B64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          for name in               CERT_B64               CERT_PASSWORD               SIGNING_IDENTITY               TEAM_ID               API_KEY_B64               API_KEY_ID               API_ISSUER_ID
+          do
+              if [[ -z "${!name:-}" ]]; then
+                  echo "MISSING RELEASE CREDENTIAL: $name"
+                  exit 1
+              fi
+          done
+
+          case "$SIGNING_IDENTITY" in
+              "Developer ID Application:"*)
+                  ;;
+              *)
+                  echo "SIGNING IDENTITY IS NOT DEVELOPER ID APPLICATION"
+                  exit 1
+                  ;;
+          esac
+
+          echo "RELEASE CREDENTIAL CONTRACT: PASS"
+
+      - name: Import Developer ID certificate
+        env:
+          CERT_B64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          CERT_PATH="$RUNNER_TEMP/developer-id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/wam-release.keychain-db"
+          KEYCHAIN_PASSWORD="wam-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          export CERT_PATH
+          export CERT_B64
+
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          Path(
+              os.environ["CERT_PATH"]
+          ).write_bytes(
+              base64.b64decode(
+                  os.environ["CERT_B64"],
+                  validate=True,
+              )
+          )
+          PY
+
+          security create-keychain               -p "$KEYCHAIN_PASSWORD"               "$KEYCHAIN_PATH"
+
+          security set-keychain-settings               -lut 21600               "$KEYCHAIN_PATH"
+
+          security unlock-keychain               -p "$KEYCHAIN_PASSWORD"               "$KEYCHAIN_PATH"
+
+          security import               "$CERT_PATH"               -P "$CERT_PASSWORD"               -A               -t cert               -f pkcs12               -k "$KEYCHAIN_PATH"
+
+          security set-key-partition-list               -S apple-tool:,apple:               -s               -k "$KEYCHAIN_PASSWORD"               "$KEYCHAIN_PATH"
+
+          security list-keychains               -d user               -s "$KEYCHAIN_PATH"
+
+          security find-identity               -v               -p codesigning               "$KEYCHAIN_PATH"
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH"               >> "$GITHUB_ENV"
+
+      - name: Materialize notarization API key
+        env:
+          API_KEY_B64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          set -euo pipefail
+
+          KEY_PATH="$RUNNER_TEMP/AuthKey_${API_KEY_ID}.p8"
+
+          export KEY_PATH
+          export API_KEY_B64
+
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          path = Path(
+              os.environ["KEY_PATH"]
+          )
+
+          path.write_bytes(
+              base64.b64decode(
+                  os.environ["API_KEY_B64"],
+                  validate=True,
+              )
+          )
+
+          path.chmod(0o600)
+          PY
+
+          echo "APPLE_NOTARY_KEY_PATH=$KEY_PATH"               >> "$GITHUB_ENV"
+
+      - name: Install hash-locked dependencies
+        run: |
+          set -euo pipefail
+
+          python -m pip install               --disable-pip-version-check               --require-hashes               -r requirements-hashed.txt
+
+          SDK_ROOT="../wam-silent-payments/integration-deps/wam-sdk"
+
+          PIP_NO_INDEX=1           python -m pip install               --disable-pip-version-check               --no-deps               --no-build-isolation               "$SDK_ROOT"
+
+          PIP_NO_INDEX=1           python -m pip install               --disable-pip-version-check               --no-deps               --no-build-isolation               ../wam-silent-payments
+
+      - name: Verify locked source and artifacts
+        run: |
+          set -euo pipefail
+
+          export PYTHONPATH="$PWD/src:$PWD"
+
+          python scripts/supply_chain.py               verify               --root .               --wsp ../wam-silent-payments               --lock supply-chain.lock.json
+
+          python scripts/artifact_lock.py               verify               --root .
+
+          python scripts/release_integrity.py               --root .
+
+          python -m pytest -q
+
+      - name: Build Developer ID signed app
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+
+          MACOS_ENTITLEMENTS_FILE="$PWD/packaging/macos/entitlements.plist"           PYTHON="$(command -v python)"           bash scripts/build_repro_app.sh RELEASE
+
+      - name: Verify Developer ID app signature
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          APP="$PWD/.repro-build/RELEASE/dist/WAM Silent Wallet.app"
+
+          python scripts/macos_release.py               verify-app               --app "$APP"               --team-id "$TEAM_ID"               --bundle-id "$MACOS_BUNDLE_ID"
+
+      - name: Create and sign DMG
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+
+          APP="$PWD/.repro-build/RELEASE/dist/WAM Silent Wallet.app"
+          DMG="$PWD/.release/WAM-Silent-Wallet.dmg"
+
+          mkdir -p "$PWD/.release"
+
+          python scripts/macos_release.py               create-dmg               --app "$APP"               --output "$DMG"               --volume-name "WAM Silent Wallet"
+
+          python scripts/macos_release.py               sign-dmg               --dmg "$DMG"               --identity "$MACOS_SIGNING_IDENTITY"
+
+      - name: Submit to Apple notary service
+        env:
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          DMG="$PWD/.release/WAM-Silent-Wallet.dmg"
+
+          python scripts/macos_release.py               notarize               --dmg "$DMG"               --key "$APPLE_NOTARY_KEY_PATH"               --key-id "$API_KEY_ID"               --issuer "$API_ISSUER_ID"               --output "$PWD/.release/notarization.json"
+
+      - name: Staple and Gatekeeper verify
+        run: |
+          set -euo pipefail
+
+          DMG="$PWD/.release/WAM-Silent-Wallet.dmg"
+
+          python scripts/macos_release.py               staple-verify               --dmg "$DMG"
+
+      - name: Write release qualification evidence
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          APP="$PWD/.repro-build/RELEASE/dist/WAM Silent Wallet.app"
+          DMG="$PWD/.release/WAM-Silent-Wallet.dmg"
+
+          python scripts/macos_release.py               evidence               --app "$APP"               --dmg "$DMG"               --team-id "$TEAM_ID"               --bundle-id "$MACOS_BUNDLE_ID"               --notarization "$PWD/.release/notarization.json"               --output "$PWD/.release/macos-release-evidence.json"
+
+          cat "$PWD/.release/macos-release-evidence.json"
+
+      - name: Upload signed and notarized release
+        uses: actions/upload-artifact@v4
+        with:
+          name: wam-silent-wallet-macos-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            wam-silent-wallet/.release/WAM-Silent-Wallet.dmg
+            wam-silent-wallet/.release/notarization.json
+            wam-silent-wallet/.release/macos-release-evidence.json
+            wam-silent-wallet/supply-chain.lock.json
+            wam-silent-wallet/artifacts.lock.json
+            wam-silent-wallet/sbom.cdx.json
+
+      - name: Destroy temporary keychain
+        if: always()
+        run: |
+          set +e
+
+          if [[ -n "${KEYCHAIN_PATH:-}" ]]; then
+              security delete-keychain "$KEYCHAIN_PATH"
+          fi
+
+          rm -f               "$RUNNER_TEMP/developer-id.p12"               "$RUNNER_TEMP"/AuthKey_*.p8
