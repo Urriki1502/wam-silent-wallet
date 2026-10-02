@@ -55,7 +55,7 @@ jobs:
                   data[
                       "python"
                   ][
-                      "version"
+                      "major_minor"
                   ]
               ),
               "machine": (

@@ -18,7 +18,7 @@ import tomllib
 from packaging.requirements import Requirement
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 PIN_RE = re.compile(
     r"^\s*"
@@ -611,8 +611,9 @@ def build_manifest(
             "implementation": (
                 platform.python_implementation()
             ),
-            "version": (
-                platform.python_version()
+            "major_minor": (
+                f"{sys.version_info.major}."
+                f"{sys.version_info.minor}"
             ),
             "cache_tag": (
                 sys.implementation.cache_tag
