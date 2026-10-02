@@ -183,17 +183,19 @@ class BackupPage(QWidget):
         layout.addStretch()
 
     def create_backup(self):
-        password = self.session_service.passphrase()
-
         self.create_button.setEnabled(False)
 
         try:
-            result = (
-                self.wallet_service
-                .create_recovery_bundle(
-                    password
+            with (
+                self.session_service
+                .secret_lease()
+            ) as secret:
+                result = (
+                    self.wallet_service
+                    .create_recovery_bundle(
+                        secret
+                    )
                 )
-            )
 
             self.last_backup_path = (
                 result["path"]
@@ -267,8 +269,6 @@ class BackupPage(QWidget):
         self.details.setText("")
 
     def verify_backup(self):
-        password = self.session_service.passphrase()
-
         if not self.last_backup_path:
             self.status.setText(
                 "Create or select a recovery bundle first."
@@ -278,13 +278,17 @@ class BackupPage(QWidget):
         self.verify_button.setEnabled(False)
 
         try:
-            result = (
-                self.wallet_service
-                .verify_recovery_bundle(
-                    password,
-                    self.last_backup_path,
+            with (
+                self.session_service
+                .secret_lease()
+            ) as secret:
+                result = (
+                    self.wallet_service
+                    .verify_recovery_bundle(
+                        secret,
+                        self.last_backup_path,
+                    )
                 )
-            )
 
             short_address = (
                 result["base_address"][:22]
