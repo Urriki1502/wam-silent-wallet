@@ -30,12 +30,6 @@ class ReceivePage(QWidget):
 
         self.load_addresses()
 
-    def _password(self):
-        return (
-            self.session_service
-            .passphrase()
-        )
-
     def _build(self):
         layout = QVBoxLayout(self)
 
@@ -238,12 +232,16 @@ class ReceivePage(QWidget):
 
     def load_addresses(self):
         try:
-            addresses = (
-                self.wallet_service
-                .receive_addresses(
-                    self._password()
+            with (
+                self.session_service
+                .secret_lease()
+            ) as secret:
+                addresses = (
+                    self.wallet_service
+                    .receive_addresses(
+                        secret
+                    )
                 )
-            )
 
             self._populate(
                 addresses
@@ -275,13 +273,17 @@ class ReceivePage(QWidget):
         )
 
         try:
-            result = (
-                self.wallet_service
-                .create_labeled_address(
-                    self._password(),
-                    name,
+            with (
+                self.session_service
+                .secret_lease()
+            ) as secret:
+                result = (
+                    self.wallet_service
+                    .create_labeled_address(
+                        secret,
+                        name,
+                    )
                 )
-            )
 
             self.label_name.clear()
 
