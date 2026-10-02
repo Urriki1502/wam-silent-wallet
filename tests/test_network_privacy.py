@@ -3,9 +3,54 @@ import unittest
 from wam_silent_wallet.services.privacy_service import NetworkPrivacyService
 
 
+class _Cookie:
+    def is_file(self):
+        return True
+
+
+class _FakeNode:
+    rpc_url = "http://127.0.0.1:18443"
+    cookie_path = _Cookie()
+
+    def network_info(self):
+        return {
+            "networkactive": True,
+            "networks": [
+                {
+                    "name": "ipv4",
+                    "reachable": True,
+                    "proxy": "",
+                },
+                {
+                    "name": "onion",
+                    "reachable": False,
+                    "proxy": "",
+                },
+            ],
+        }
+
+
 class NetworkPrivacyServiceTests(
     unittest.TestCase
 ):
+    def test_snapshot_uses_read_only_node_bridge(self):
+        result = NetworkPrivacyService(
+            _FakeNode()
+        ).snapshot()
+
+        self.assertEqual(
+            result.mode,
+            "direct",
+        )
+
+        self.assertTrue(
+            result.rpc_loopback
+        )
+
+        self.assertTrue(
+            result.cookie_available
+        )
+
     def test_direct_mode_detects_unproxied_clearnet(self):
         result = (
             NetworkPrivacyService
