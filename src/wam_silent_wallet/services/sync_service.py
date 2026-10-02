@@ -217,6 +217,31 @@ class BackgroundSyncService:
                         .scanner_chain(),
                     )
                 )
+
+                reconcile = getattr(
+                    self.wallet_service,
+                    "reconcile_payment_journal",
+                    None,
+                )
+
+                if callable(
+                    reconcile
+                ):
+                    reconciliation = (
+                        reconcile(
+                            passphrase,
+                            self.node_service
+                            .scanner_chain(),
+                        )
+                    )
+
+                    wallet = dict(
+                        wallet
+                    )
+
+                    wallet[
+                        "payment_reconciliation"
+                    ] = reconciliation
             except Exception as exc:
                 error_code = self._error_code(
                     exc

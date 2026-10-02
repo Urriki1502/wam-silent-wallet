@@ -613,3 +613,161 @@ class NodeFailurePaymentTests(
             wallet.wallet.release_calls,
             [],
         )
+
+
+class FakePaymentJournal:
+    def __init__(self):
+        self.calls = []
+
+    def record_signed(
+        self,
+        token,
+        manifest_digest,
+        signed_psbt,
+    ):
+        self.calls.append(
+            (
+                "record",
+                token,
+                manifest_digest,
+                signed_psbt,
+            )
+        )
+
+    def transition(
+        self,
+        token,
+        state,
+        *,
+        txid=None,
+    ):
+        self.calls.append(
+            (
+                "transition",
+                token,
+                state,
+                txid,
+            )
+        )
+
+
+class PaymentJournalIntegrationTests(
+    unittest.TestCase
+):
+    def test_success_persists_irreversible_sequence(self):
+        ring = FakeRing()
+        wallet = FakeWallet()
+        signer = FakeSignerService()
+        journal = FakePaymentJournal()
+
+        service = PaymentService(
+            FakeWalletService(
+                ring,
+                wallet,
+            ),
+            FakeNodeService(),
+            signer_service=signer,
+            journal_service=journal,
+        )
+
+        review = make_review()
+
+        result = service.broadcast(
+            "secret",
+            review,
+        )
+
+        self.assertEqual(
+            result["txid"],
+            "ab" * 32,
+        )
+
+        self.assertEqual(
+            journal.calls[0][0],
+            "record",
+        )
+
+        self.assertEqual(
+            journal.calls[1],
+            (
+                "transition",
+                "draft-token",
+                "signed",
+                None,
+            ),
+        )
+
+        self.assertEqual(
+            journal.calls[2],
+            (
+                "transition",
+                "draft-token",
+                "broadcasting",
+                None,
+            ),
+        )
+
+        self.assertEqual(
+            journal.calls[3],
+            (
+                "transition",
+                "draft-token",
+                "broadcast",
+                "ab" * 32,
+            ),
+        )
+
+    def test_uncertain_broadcast_is_persisted(self):
+        ring = FakeRing()
+        wallet = FakeWallet()
+        signer = FakeSignerService()
+        journal = FakePaymentJournal()
+
+        def fail_broadcast(
+            signed_psbt,
+            token,
+            chain,
+        ):
+            raise ConnectionError(
+                "response lost"
+            )
+
+        wallet.broadcast = (
+            fail_broadcast
+        )
+
+        service = PaymentService(
+            FakeWalletService(
+                ring,
+                wallet,
+            ),
+            FakeNodeService(),
+            signer_service=signer,
+            journal_service=journal,
+        )
+
+        review = make_review()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "BROADCAST_OUTCOME_UNCERTAIN",
+        ):
+            service.broadcast(
+                "secret",
+                review,
+            )
+
+        self.assertEqual(
+            journal.calls[-1],
+            (
+                "transition",
+                "draft-token",
+                "uncertain",
+                None,
+            ),
+        )
+
+        self.assertEqual(
+            wallet.wallet.release_calls,
+            [],
+        )

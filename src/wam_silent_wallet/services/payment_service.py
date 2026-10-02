@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from wam_sp.wallet import Intent
 
 from .fee_service import FeePolicyService
+from .payment_journal import PaymentJournalService
 from .signer_service import SignerService
 from .transaction_manifest import SigningManifest
 
@@ -63,6 +64,7 @@ class PaymentService:
         wallet_service,
         node_service,
         signer_service=None,
+        journal_service=None,
     ):
         self.wallet_service = wallet_service
         self.node_service = node_service
@@ -74,6 +76,31 @@ class PaymentService:
         self.fees = FeePolicyService(
             node_service
         )
+
+        if journal_service is not None:
+            self.journal = journal_service
+
+        elif hasattr(
+            wallet_service,
+            "payment_journal",
+        ):
+            self.journal = (
+                wallet_service
+                .payment_journal
+            )
+
+        elif hasattr(
+            wallet_service,
+            "data_dir",
+        ):
+            self.journal = (
+                PaymentJournalService(
+                    wallet_service.data_dir
+                )
+            )
+
+        else:
+            self.journal = None
 
     @staticmethod
     def _release_draft(
@@ -425,6 +452,18 @@ class PaymentService:
                 )
             )
 
+            # Persist signed transaction material before the
+            # reservation crosses the irreversible signed boundary.
+            # If this write fails, the reservation is still a draft
+            # and the outer failure path may safely release it.
+            if self.journal is not None:
+                self.journal.record_signed(
+                    review.manifest
+                    .reservation_token,
+                    review.manifest.digest,
+                    signed_psbt,
+                )
+
             # Once signature material exists, the input
             # reservation is no longer a disposable draft.
             # Subsequent failures must not automatically make
@@ -433,6 +472,13 @@ class PaymentService:
                 review.manifest
                 .reservation_token
             )
+
+            if self.journal is not None:
+                self.journal.transition(
+                    review.manifest
+                    .reservation_token,
+                    "signed",
+                )
 
             # A signer backend must not mutate the coordinator
             # proposal while signing.  PSBT byte-level output
@@ -447,6 +493,13 @@ class PaymentService:
             # transaction before the response was lost.
             #
             # Never expose this as an ordinary retryable failure.
+            if self.journal is not None:
+                self.journal.transition(
+                    review.manifest
+                    .reservation_token,
+                    "broadcasting",
+                )
+
             try:
                 txid = wallet.broadcast(
                     signed_psbt,
@@ -456,10 +509,35 @@ class PaymentService:
                     .broadcast_chain(),
                 )
 
+
             except Exception as exc:
+                if self.journal is not None:
+                    try:
+                        self.journal.transition(
+                            review.manifest
+                            .reservation_token,
+                            "uncertain",
+                        )
+                    except Exception:
+                        pass
+
                 raise RuntimeError(
                     "BROADCAST_OUTCOME_UNCERTAIN"
                 ) from exc
+
+            if self.journal is not None:
+                try:
+                    self.journal.transition(
+                        review.manifest
+                        .reservation_token,
+                        "broadcast",
+                        txid=txid,
+                    )
+                except Exception:
+                    # Broadcast already succeeded.  Never turn a
+                    # known-successful payment into an apparent send
+                    # failure because the local journal update failed.
+                    pass
 
             return {
                 "txid": txid,

@@ -10,6 +10,8 @@ from typing import TypeAlias
 
 from .recovery_service import RecoveryService
 from .scanner_snapshot import build_scanner_snapshot
+from .payment_journal import PaymentJournalService
+from .payment_reconciliation import PaymentReconciliationService
 
 from wam_sp.api import SilentWallet
 from wam_sp.keystore import MAGIC, Keyring, load_private, save_private
@@ -74,6 +76,18 @@ class WalletService:
             self.data_dir,
             self.db_path,
             self.keys_path,
+        )
+
+        self.payment_journal = (
+            PaymentJournalService(
+                self.data_dir
+            )
+        )
+
+        self.payment_reconciliation = (
+            PaymentReconciliationService(
+                self.payment_journal
+            )
         )
 
         # Repair or finalize any recovery activation interrupted
@@ -661,6 +675,36 @@ class WalletService:
             raise ValueError(
                 "RECOVERY_RESCAN_REQUIRED"
             )
+
+        if (
+            self.payment_journal
+            .has_unresolved()
+        ):
+            raise ValueError(
+                "PAYMENT_RECONCILIATION_REQUIRED"
+            )
+
+    def reconcile_payment_journal(
+        self,
+        passphrase: SecretMaterial,
+        chain,
+    ) -> dict:
+        ring, wallet = self._open(
+            passphrase
+        )
+
+        try:
+            return (
+                self.payment_reconciliation
+                .reconcile(
+                    wallet,
+                    chain,
+                )
+            )
+
+        finally:
+            wallet.close()
+            ring.close()
 
     @staticmethod
     def amount_to_atoms(amount_text: str) -> int:
