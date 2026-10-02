@@ -149,4 +149,48 @@ printf '\nConfigured secret names:\n'
 gh secret list --repo "$REPO"     | grep -E         '^(MACOS_CERTIFICATE_P12_BASE64|MACOS_CERTIFICATE_PASSWORD|MACOS_SIGNING_IDENTITY|APPLE_TEAM_ID|APPLE_API_KEY_P8_BASE64|APPLE_API_KEY_ID|APPLE_API_ISSUER_ID)[[:space:]]'     || true
 
 printf '\nMACOS RELEASE CREDENTIAL SETUP: PASS\n'
-printf 'Next: run workflow "macOS Release Signing & Notarization" on branch feat/6n7h-macos-signing-notarization.\n'
+
+if [[ "${WAM_NO_DISPATCH:-0}" == "1" ]]; then
+    printf 'Workflow dispatch skipped because WAM_NO_DISPATCH=1.\n'
+    exit 0
+fi
+
+RELEASE_BRANCH="feat/6n7h-macos-signing-notarization"
+WORKFLOW="macos-release.yml"
+
+printf '\nDispatching %s on %s...\n' "$WORKFLOW" "$RELEASE_BRANCH"
+
+gh workflow run "$WORKFLOW" \
+    --repo "$REPO" \
+    --ref "$RELEASE_BRANCH"
+
+RUN_ID=""
+for _ in {1..20}; do
+    RUN_ID="$(
+        gh run list \
+            --repo "$REPO" \
+            --workflow "$WORKFLOW" \
+            --branch "$RELEASE_BRANCH" \
+            --event workflow_dispatch \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty'
+    )"
+
+    if [[ -n "$RUN_ID" ]]; then
+        break
+    fi
+
+    sleep 3
+done
+
+[[ -n "$RUN_ID" ]] \
+    || fail "workflow dispatched but run ID was not discovered"
+
+printf 'Watching GitHub Actions run: %s\n\n' "$RUN_ID"
+
+gh run watch "$RUN_ID" \
+    --repo "$REPO" \
+    --exit-status
+
+printf '\n6N-7H MACOS SIGNING / NOTARIZATION: PASS\n'
