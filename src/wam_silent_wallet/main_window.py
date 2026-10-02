@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
 from .services.node_service import NodeService
 from .services.wallet_service import WalletService
 from .services.session_service import SessionService
+from .services.sync_service import BackgroundSyncService
+from .services.sync_worker import BackgroundSyncThread
 
 from .pages.lock_page import LockPage
 from .pages.receive_page import ReceivePage
@@ -58,6 +60,17 @@ class MainWindow(QMainWindow):
                 self.wallet_service
             )
         )
+
+        self.background_sync_service = (
+            BackgroundSyncService(
+                self.wallet_service,
+                self.node_service,
+            )
+        )
+
+        self.background_sync_thread = None
+        self.payments_page = None
+        self.node_page = None
 
         self.root_stack = (
             QStackedWidget()
@@ -107,7 +120,11 @@ class MainWindow(QMainWindow):
             self.wallet_shell
         )
 
+        self._start_background_sync()
+
     def lock_wallet(self):
+        self._stop_background_sync()
+
         self.session_service.lock()
 
         self._destroy_wallet_shell()
@@ -129,11 +146,282 @@ class MainWindow(QMainWindow):
         self.wallet_shell.deleteLater()
 
         self.wallet_shell = None
+        self.payments_page = None
+        self.node_page = None
 
     def closeEvent(self, event):
+        self._stop_background_sync()
+
         self.session_service.lock()
 
         super().closeEvent(event)
+
+    # ==========================================================
+    # Background synchronization
+    # ==========================================================
+
+    def _start_background_sync(self):
+        self._stop_background_sync()
+
+        self.background_sync_service.reset()
+
+        worker = BackgroundSyncThread(
+            self.background_sync_service,
+            self.session_service,
+            self,
+        )
+
+        worker.outcome.connect(
+            self._background_sync_outcome
+        )
+
+        self.background_sync_thread = worker
+
+        self.scan_state.setText(
+            "Auto sync starting..."
+        )
+
+        self.scan_badge.set_status(
+            "AUTO SYNC",
+            "info",
+        )
+
+        worker.start()
+
+    def _stop_background_sync(self):
+        worker = self.background_sync_thread
+
+        if worker is None:
+            return
+
+        worker.stop()
+
+        # Join before SessionService clears the unlock secret.
+        worker.wait()
+
+        self.background_sync_thread = None
+
+    def _background_sync_outcome(
+        self,
+        outcome,
+    ):
+        if (
+            self.wallet_shell is None
+            or not self.session_service.unlocked
+        ):
+            return
+
+        if outcome.node is not None:
+            self._apply_dashboard_node_snapshot(
+                outcome.node
+            )
+
+            if self.node_page is not None:
+                self.node_page.apply_snapshot(
+                    outcome.node,
+                    automatic=True,
+                )
+
+        if outcome.status == "synced":
+            result = outcome.wallet
+
+            self._apply_dashboard_wallet_snapshot(
+                result,
+                automatic=True,
+            )
+
+            if self.payments_page is not None:
+                self.payments_page.apply_snapshot(
+                    result,
+                    automatic=True,
+                )
+
+            return
+
+        if outcome.status == "scanner_busy":
+            self.scan_state.setText(
+                "Scanner busy"
+            )
+
+            self.scan_badge.set_status(
+                "BUSY",
+                "info",
+            )
+
+            self.scan_message.setText(
+                "Another wallet operation is using the scanner. "
+                "Background sync will retry automatically."
+            )
+
+            return
+
+        if outcome.status in (
+            "node_not_ready",
+            "node_error",
+        ):
+            self.scan_state.setText(
+                "Waiting for node"
+            )
+
+            self.scan_badge.set_status(
+                "WAITING",
+                "warning",
+            )
+
+            self.scan_message.setText(
+                "Background sync is waiting for WAM Core. "
+                f"Retry in {outcome.next_delay_seconds:.0f}s."
+            )
+
+            return
+
+        if outcome.status == "wallet_error":
+            self.scan_state.setText(
+                "Sync retry"
+            )
+
+            self.scan_badge.set_status(
+                "RETRYING",
+                "warning",
+            )
+
+            self.scan_message.setText(
+                "Background wallet synchronization failed safely. "
+                f"Retry in {outcome.next_delay_seconds:.0f}s "
+                f"({outcome.error_code})."
+            )
+
+    def _apply_dashboard_node_snapshot(
+        self,
+        status: dict,
+    ):
+        self.node_state.setText(
+            "Connected / Ready"
+            if status["ready"]
+            else "Connected / Not ready"
+        )
+
+        if status["ready"]:
+            self.node_badge.set_status(
+                "READY",
+                "success",
+            )
+
+            self.header_node_badge.set_status(
+                "NODE READY",
+                "success",
+            )
+
+        else:
+            self.node_badge.set_status(
+                "NOT READY",
+                "warning",
+            )
+
+            self.header_node_badge.set_status(
+                "NODE NOT READY",
+                "warning",
+            )
+
+        self.network_value.setText(
+            status["network"]
+        )
+
+        self.blocks_value.setText(
+            str(status["blocks"])
+        )
+
+        self.headers_value.setText(
+            str(status["headers"])
+        )
+
+        self.ibd_value.setText(
+            str(status["ibd"])
+        )
+
+        self.tip_value.setText(
+            status["tip"][:24]
+            + "..."
+        )
+
+    def _apply_dashboard_wallet_snapshot(
+        self,
+        result: dict,
+        *,
+        automatic: bool,
+    ):
+        confirmed = (
+            result["confirmed_atoms"]
+            / 100_000_000
+        )
+
+        available = (
+            result["available_atoms"]
+            / 100_000_000
+        )
+
+        pending_atoms = (
+            result["unconfirmed_atoms"]
+            or 0
+        )
+
+        pending = (
+            pending_atoms
+            / 100_000_000
+        )
+
+        self.scan_state.setText(
+            "Auto synced"
+            if automatic
+            else "Synced"
+        )
+
+        self.scan_badge.set_status(
+            "AUTO SYNC"
+            if automatic
+            else "SYNCED",
+            "success",
+        )
+
+        self.balance_value.setText(
+            f"{confirmed:.8f}"
+        )
+
+        self.available_value.setText(
+            f"{available:.8f}"
+        )
+
+        self.pending_value.setText(
+            f"{pending:.8f} WAM"
+        )
+
+        count = result.get(
+            "payments_count"
+        )
+
+        if count is None:
+            count = result.get(
+                "payments",
+                0,
+            )
+
+        self.payment_count.setText(
+            str(count)
+        )
+
+        self.scan_message.setText(
+            (
+                "Background sync complete — "
+                if automatic
+                else "Scan complete — "
+            )
+            + f'{result["scan_blocks"]} '
+            + "new block(s), "
+            + f'{result["scan_transactions"]} '
+            + "transaction(s), "
+            + f'{result["scan_rollback"]} '
+            + "rollback(s)."
+        )
 
     # ==========================================================
     # Wallet shell
@@ -301,18 +589,22 @@ class MainWindow(QMainWindow):
             )
         )
 
-        pages.addWidget(
-            PaymentsPage(
-                self.wallet_service,
-                self.node_service,
-                self.session_service,
-            )
+        self.payments_page = PaymentsPage(
+            self.wallet_service,
+            self.node_service,
+            self.session_service,
         )
 
         pages.addWidget(
-            NodePage(
-                self.node_service
-            )
+            self.payments_page
+        )
+
+        self.node_page = NodePage(
+            self.node_service
+        )
+
+        pages.addWidget(
+            self.node_page
         )
 
         pages.addWidget(
@@ -769,53 +1061,8 @@ class MainWindow(QMainWindow):
                 .snapshot()
             )
 
-            self.node_state.setText(
-                "Connected / Ready"
-                if status["ready"]
-                else "Connected / Not ready"
-            )
-
-            if status["ready"]:
-                self.node_badge.set_status(
-                    "READY",
-                    "success",
-                )
-
-                self.header_node_badge.set_status(
-                    "NODE READY",
-                    "success",
-                )
-
-            else:
-                self.node_badge.set_status(
-                    "NOT READY",
-                    "warning",
-                )
-
-                self.header_node_badge.set_status(
-                    "NODE NOT READY",
-                    "warning",
-                )
-
-            self.network_value.setText(
-                status["network"]
-            )
-
-            self.blocks_value.setText(
-                str(status["blocks"])
-            )
-
-            self.headers_value.setText(
-                str(status["headers"])
-            )
-
-            self.ibd_value.setText(
-                str(status["ibd"])
-            )
-
-            self.tip_value.setText(
-                status["tip"][:24]
-                + "..."
+            self._apply_dashboard_node_snapshot(
+                status
             )
 
         except Exception:
@@ -869,59 +1116,12 @@ class MainWindow(QMainWindow):
                 )
             )
 
-            confirmed = (
-                result["confirmed_atoms"]
-                / 100_000_000
-            )
-
-            available = (
-                result["available_atoms"]
-                / 100_000_000
-            )
-
-            pending_atoms = (
-                result["unconfirmed_atoms"]
-                or 0
-            )
-
-            pending = (
-                pending_atoms
-                / 100_000_000
-            )
-
-            self.scan_state.setText(
-                "Synced"
-            )
-
-            self.scan_badge.set_status(
-                "SYNCED",
-                "success",
-            )
-
-            self.balance_value.setText(
-                f"{confirmed:.8f}"
-            )
-
-            self.available_value.setText(
-                f"{available:.8f}"
-            )
-
-            self.pending_value.setText(
-                f"{pending:.8f} WAM"
-            )
-
-            self.payment_count.setText(
-                str(result["payments"])
-            )
-
-            self.scan_message.setText(
-                "Scan complete — "
-                f'{result["scan_blocks"]} '
-                "new block(s), "
-                f'{result["scan_transactions"]} '
-                "transaction(s), "
-                f'{result["scan_rollback"]} '
-                "rollback(s)."
+            self._apply_dashboard_wallet_snapshot(
+                {
+                    **result,
+                    "payments_count": result["payments"],
+                },
+                automatic=False,
             )
 
         except Exception:
